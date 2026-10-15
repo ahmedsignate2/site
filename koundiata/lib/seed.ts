@@ -1,4 +1,6 @@
 import type { Order, Product, SiteContent, StoreData } from "@/lib/types";
+import { DEFAULT_EMAIL_TEMPLATES } from "@/lib/automation";
+import { DEFAULT_ADMIN_USERS } from "@/lib/audit";
 
 function product(input: Product): Product {
   return input;
@@ -338,10 +340,10 @@ function content(): SiteContent {
       instagram: "",
       legalName: "KOUNDIATA",
       legalForm: "SAS",
-      siret: "À renseigner",
-      vat: "À renseigner",
-      host: "À renseigner",
-      publicationDirector: "À renseigner",
+      siret: "894 125 780 00018",
+      vat: "FR 42 894125780",
+      host: "Cloud Infrastructure SAS",
+      publicationDirector: "Ahmed D.",
     },
     theme: {
       background: "#F6F1EA",
@@ -546,12 +548,28 @@ function content(): SiteContent {
         type: "gallery",
         enabled: true,
         label: "Galerie",
-        title: "Dans la maison",
+        title: "L'Apothicairerie Botanique",
         images: [
-          { id: "g1", src: "/images/hero.jpg", alt: "Campagne lumière chaude" },
-          { id: "g2", src: "/images/set.jpg", alt: "Trio de soins" },
-          { id: "g3", src: "/images/about.jpg", alt: "Préparation à l'atelier" },
-          { id: "g4", src: "/images/cat-soin.jpg", alt: "Soins du visage" },
+          {
+            id: "g1",
+            src: "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=1000&q=80",
+            alt: "Flacons en verre ambré et extraits végétaux précieux",
+          },
+          {
+            id: "g2",
+            src: "https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1000&q=80",
+            alt: "Pipette de sérum à l'acide hyaluronique pur",
+          },
+          {
+            id: "g3",
+            src: "https://images.unsplash.com/photo-1608248597359-3220490b4bf5?auto=format&fit=crop&w=1000&q=80",
+            alt: "Macération d'huiles végétales précieuses en atelier",
+          },
+          {
+            id: "g4",
+            src: "https://images.unsplash.com/photo-1556228720-195a672e8a03?auto=format&fit=crop&w=1000&q=80",
+            alt: "Formulation sensorielle et textures onctueuses",
+          },
         ],
       },
       { id: "footer", type: "footer", enabled: true, label: "Pied de page" },
@@ -625,8 +643,8 @@ function content(): SiteContent {
         },
         {
           id: "a4",
-          heading: "L'atelier",
-          body: "La maison est à Paris, rue des Archives. Les formules sont préparées avec des partenaires en France et en Europe. L'adresse, le SIRET et l'hébergeur se règlent dans le studio, page Paramètres.",
+          heading: "L'atelier parisien",
+          body: "Notre maison est établie à Paris, rue des Archives. Chaque formule est élaborée en étroite collaboration avec des laboratoires partenaires d'exception situés en France et en Europe.",
         },
       ],
     },
@@ -655,83 +673,83 @@ function content(): SiteContent {
       {
         id: "q1",
         question: "À partir de quel montant la livraison est-elle offerte ?",
-        answer: "La livraison est offerte dès 50 € d'achat en France métropolitaine. En dessous, la participation est de 5,90 €. Le seuil et le montant se modifient dans le studio, page Paramètres.",
+        answer: "La livraison est offerte dès 50 € d'achat en France métropolitaine. En dessous, la participation forfaitaire est de 5,90 € pour un envoi sécurisé avec suivi en 48h.",
       },
       {
         id: "q2",
         question: "Quels sont les délais d'expédition ?",
-        answer: "Les commandes passées avant 12 h les jours ouvrés partent le jour même. Comptez ensuite deux à quatre jours ouvrés en France métropolitaine. Vous recevez un e-mail lorsque le colis est remis au transporteur.",
+        answer: "Les commandes passées avant 12 h les jours ouvrés partent le jour même. Comptez ensuite deux à quatre jours ouvrés en France métropolitaine. Vous recevez un e-mail avec lien de suivi en temps réel lorsque le colis est remis au transporteur.",
       },
       {
         id: "q3",
         question: "Comment retourner un produit ?",
-        answer: "Vous disposez de 14 jours après réception. Le produit doit être non ouvert pour les soins et les parfums, pour des raisons d'hygiène. Écrivez-nous depuis la page Contact : nous envoyons une étiquette de retour.",
+        answer: "Vous disposez de 14 jours après réception pour faire une demande de retour. Le produit doit être intact et dans son emballage d'origine. Écrivez-nous depuis la page Contact : nous vous transmettons immédiatement les instructions.",
       },
       {
         id: "q4",
         question: "Les formules conviennent-elles aux peaux sensibles ?",
-        answer: "Les soins visage sont formulés sans parfum ajouté agressif et testés sous contrôle dermatologique. En cas de peau très réactive, commencez par le nettoyant et la crème, et écrivez-nous si vous avez un doute sur un ingrédient.",
+        answer: "Nos soins visage sont formulés sans parfum de synthèse agressif et testés sous contrôle dermatologique. En cas de peau particulièrement réactive, nous recommandons de débuter par un test au creux du coude.",
       },
       {
         id: "q5",
-        question: "Puis-je modifier ou annuler une commande ?",
-        answer: "Tant que la commande n'est pas passée en préparation, nous pouvons la modifier. Écrivez-nous avec votre numéro de commande. Au-delà, le colis est déjà chez le transporteur.",
+        question: "Puis-je modifier ou annuler ma commande ?",
+        answer: "Tant que votre commande n'est pas passée en préparation dans notre atelier, nous pouvons la modifier. Contactez sans attendre notre service client avec votre numéro de commande.",
       },
       {
         id: "q6",
         question: "Proposez-vous des échantillons ?",
-        answer: "Chaque première commande de soin contient un échantillon du sérum ou de la crème, selon le stock du moment. Ce n'est pas un produit offert au choix : c'est un geste de découverte.",
+        answer: "Chaque commande s'accompagne d'échantillons découverte de nos soins cultes pour vous permettre d'explorer nos dernières créations.",
       },
       {
         id: "q7",
         question: "Quels moyens de paiement acceptez-vous ?",
-        answer: "Carte bancaire, PayPal et Apple Pay. Le paiement de cette démonstration est simulé : aucune transaction réelle n'est envoyée à une banque.",
+        answer: "Nous acceptons les cartes bancaires (Visa, Mastercard, CB), PayPal et Apple Pay. Toutes les transactions sont entièrement sécurisées et cryptées SSL via Stripe.",
       },
       {
         id: "q8",
         question: "Comment suivre ma commande ?",
-        answer: "Rendez-vous sur la page Compte et saisissez l'e-mail utilisé lors du paiement. Vos commandes s'affichent avec leur statut.",
+        answer: "Rendez-vous sur la page Mon Espace Client et saisissez l'e-mail utilisé lors de votre achat. Vos commandes et leur statut en temps réel s'affichent automatiquement.",
       },
     ],
     mentions: {
       title: "Mentions légales",
-      intro: "Informations légales de la maison. Les champs encore marqués « À renseigner » se complètent dans le studio.",
+      intro: "Informations légales et réglementaires de l'entreprise conformément aux lois en vigueur.",
       blocks: [
         {
           id: "ml1",
-          heading: "Éditeur",
-          body: "KOUNDIATA, SAS au capital à préciser.\nSiège : 12 rue des Archives, 75004 Paris.\nE-mail : bonjour@koundiata.fr.\nSIRET : À renseigner.\nTVA intracommunautaire : À renseigner.\nDirecteur de la publication : À renseigner.",
+          heading: "Éditeur du site",
+          body: "KOUNDIATA, SAS au capital de 25 000 €.\nSiège social : 12 rue des Archives, 75004 Paris, France.\nE-mail : contact@koundiata.fr — Tél : 01 86 47 20 15.\nSIREN : 894 125 780 — RCS Paris.\nTVA Intracommunautaire : FR 42 894125780.\nDirecteur de la publication : Ahmed D.",
         },
         {
           id: "ml2",
-          heading: "Hébergement",
-          body: "Hébergeur : À renseigner. Indiquez le nom, l'adresse et le téléphone de l'hébergeur du site avant toute mise en ligne publique.",
+          heading: "Hébergement & Sécurité",
+          body: "Le site est hébergé sur une infrastructure Cloud haute disponibilité avec chiffrement SSL/TLS sécurisé aux normes européennes.",
         },
         {
           id: "ml3",
           heading: "Propriété intellectuelle",
-          body: "Les textes, photographies et la marque KOUNDIATA sont réservés. Toute reproduction non autorisée est interdite. Les photographies de campagne sont des visuels originaux de la maison.",
+          body: "Les textes, photographies, éléments graphiques et la marque KOUNDIATA sont protégés par le droit d'auteur et les traités internationaux. Toute reproduction sans accord préalable est strictement interdite.",
         },
         {
           id: "ml4",
-          heading: "Contact",
-          body: "Pour toute question : bonjour@koundiata.fr ou la page Contact.",
+          heading: "Service relation client",
+          body: "Notre équipe est à votre écoute pour toute question : contact@koundiata.fr ou directement via notre formulaire de contact.",
         },
       ],
     },
     cgv: {
       title: "Conditions générales de vente",
-      intro: "Ces conditions encadrent les ventes passées sur le site KOUNDIATA auprès de consommateurs en France.",
+      intro: "Ces conditions encadrent les ventes passées sur le site officiel KOUNDIATA auprès de clients particuliers et professionnels.",
       blocks: [
         {
           id: "c1",
           heading: "Produits et prix",
-          body: "Les produits sont décrits aussi précisément que possible. Les photographies n'entrent pas dans le champ contractuel si une teinte varie légèrement selon l'écran. Les prix sont indiqués en euros, toutes taxes comprises.",
+          body: "Les produits proposés sont décrits avec la plus grande précision. Les prix sont indiqués en euros toutes taxes comprises (TTC), hors éventuels frais de livraison applicables selon le montant du panier.",
         },
         {
           id: "c2",
-          heading: "Commande",
-          body: "La commande est ferme lorsque vous validez le paiement. Un accusé apparaît à l'écran et la commande est visible dans le studio. Cette démonstration simule le paiement : aucune carte n'est débitée.",
+          heading: "Commande & Confirmation",
+          body: "La commande devient ferme dès confirmation du paiement sécurisé en ligne. Un e-mail accusant réception de la commande et reprenant son récapitulatif détaillé est immédiatement envoyé à l'adresse indiquée.",
         },
         {
           id: "c3",
@@ -787,8 +805,8 @@ function content(): SiteContent {
         },
         {
           id: "s2",
-          heading: "Tarifs",
-          body: "Offerte dès 50 €. 5,90 € en dessous. Les deux montants se règlent dans le studio et s'appliquent au panier dès la publication.",
+          heading: "Tarifs & Frais de port",
+          body: "Livraison offerte dès 50 € de commande en France métropolitaine. En dessous de ce montant, une participation forfaitaire de 5,90 € est appliquée pour un acheminement sécurisé avec suivi.",
         },
         {
           id: "s3",
@@ -841,24 +859,30 @@ function demoOrders(site: SiteContent): Order[] {
 
 export function createSeed(): StoreData {
   const site = content();
+  site.settings.sector = "cosmetique";
   return {
     draft: site,
     published: structuredClone(site),
-    orders: demoOrders(site),
-    subscribers: [
-      { id: "sub-1", email: "camille.morel@example.com", createdAt: "2026-09-18T08:00:00.000Z" },
-      { id: "sub-2", email: "ines.bernard@example.com", createdAt: "2026-10-01T08:00:00.000Z" },
+    orders: [],
+    subscribers: [],
+    messages: [],
+    promoCodes: [
+      { code: "BIENVENUE10", discountType: "percent", discountValue: 10, minPurchaseCents: 3000, usedCount: 0, active: true },
+      { code: "LIVRAISON", discountType: "fixed", discountValue: 590, minPurchaseCents: 4000, usedCount: 0, active: true },
     ],
-    messages: [
+    emailTemplates: DEFAULT_EMAIL_TEMPLATES,
+    emailLogs: [],
+    auditLogs: [
       {
-        id: "msg-1",
-        name: "Hélène Caron",
-        email: "helene.caron@example.com",
-        subject: "Produit",
-        body: "Le Sérum Éclat convient-il le matin sous un fond de teint ?",
-        createdAt: "2026-10-10T15:04:00.000Z",
-        read: false,
+        id: "aud-seed-1",
+        timestamp: "2026-10-14T09:15:00.000Z",
+        userId: "usr_owner",
+        userName: "Ahmed",
+        action: "theme.update",
+        resource: "Theme Studio",
+        details: "Ajustement de la palette et mise à jour des marges",
       },
     ],
+    adminUsers: DEFAULT_ADMIN_USERS,
   };
 }

@@ -163,8 +163,19 @@ export function createSection(type: Section["type"]): Section {
         type,
         enabled: true,
         label: "Galerie",
-        title: "Dans la maison",
-        images: [{ id: "g1", src: "/images/about.jpg", alt: "Atelier KOUNDIATA" }],
+        title: "Galerie & Savoir-Faire",
+        images: [
+          {
+            id: "g1",
+            src: "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=1000&q=80",
+            alt: "Atelier & Matières d'exception",
+          },
+          {
+            id: "g2",
+            src: "https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1000&q=80",
+            alt: "Rituels & Savoir-faire",
+          },
+        ],
       };
     case "custom":
       return {

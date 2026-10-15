@@ -23,6 +23,39 @@ export type Category = {
   linkLabel: string;
 };
 
+export type BusinessSector = "cosmetique" | "automobile" | "mode" | "hightech" | "universel";
+
+export type AutomotiveSpecs = {
+  make: string;
+  model: string;
+  year: number;
+  mileageKm: number;
+  fuel: "Essence" | "Diesel" | "Hybride" | "Électrique";
+  gearbox: "Manuelle" | "Automatique";
+  powerCh: number;
+  vin?: string;
+  warrantyMonths?: number;
+};
+
+export type CosmeticSpecs = {
+  inci: string;
+  volumeMl?: string;
+  skinType?: string;
+  routineStep?: string;
+  batchNumber?: string;
+  expirationDate?: string;
+};
+
+export type ProductVariant = {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  compareAt?: number;
+  stock: number;
+  attributes: Record<string, string>;
+};
+
 export type Product = {
   id: string;
   slug: string;
@@ -37,12 +70,17 @@ export type Product = {
   reviewCount: number;
   badge?: string;
   stock: number;
+  stockAlertThreshold?: number;
+  stockReorderQty?: number;
   featured: boolean;
   bestseller: boolean;
   ingredients: string;
   usage: string;
   volume: string;
   sku: string;
+  variants?: ProductVariant[];
+  automotiveSpecs?: AutomotiveSpecs;
+  cosmeticSpecs?: CosmeticSpecs;
 };
 
 export type TrustIcon = "truck" | "lock" | "leaf" | "headset" | "return";
@@ -154,6 +192,9 @@ export type SiteSettings = {
   vat: string;
   host: string;
   publicationDirector: string;
+  sector?: BusinessSector;
+  slogan?: string;
+  businessType?: string;
 };
 
 export type PageContent = {
@@ -192,7 +233,16 @@ export type SiteContent = {
   };
 };
 
-export type OrderStatus = "en_attente" | "payee" | "preparation" | "expediee" | "livree" | "annulee" | "echouee";
+export type OrderStatus =
+  | "en_attente"
+  | "payee"
+  | "preparation"
+  | "expediee"
+  | "livree"
+  | "annulee"
+  | "echouee"
+  | "remboursee_partiel"
+  | "remboursee_total";
 
 export type OrderItem = {
   productId: string;
@@ -200,12 +250,39 @@ export type OrderItem = {
   price: number;
   qty: number;
   image: string;
+  sku?: string;
+  variantId?: string;
+  variantName?: string;
 };
 
 export type PaymentRecord = {
   provider: "simulated" | "stripe";
   status: "pending" | "authorized" | "failed";
   reference: string;
+};
+
+export type ShippingDetails = {
+  carrier: string;
+  trackingNumber: string;
+  trackingUrl?: string;
+  shippedAt?: string;
+  deliveredAt?: string;
+};
+
+export type RefundRecord = {
+  id: string;
+  amount: number;
+  reason: string;
+  date: string;
+  stripeRefundId?: string;
+};
+
+export type ReturnRequest = {
+  id: string;
+  status: "demande" | "validee" | "refusee" | "recue" | "remboursee";
+  reason: string;
+  items?: { productId: string; qty: number }[];
+  requestedAt: string;
 };
 
 export type Order = {
@@ -228,7 +305,77 @@ export type Order = {
   items: OrderItem[];
   subtotal: number;
   shipping: number;
+  discount?: number;
+  promoCode?: string;
   total: number;
+  shippingDetails?: ShippingDetails;
+  refunds?: RefundRecord[];
+  returns?: ReturnRequest[];
+};
+
+export type PromoCode = {
+  code: string;
+  discountType: "percent" | "fixed";
+  discountValue: number;
+  minPurchaseCents: number;
+  maxUses?: number;
+  usedCount: number;
+  expiresAt?: string;
+  active: boolean;
+};
+
+export type AutomationEventName =
+  | "order.created"
+  | "payment.succeeded"
+  | "payment.failed"
+  | "order.preparation"
+  | "order.shipped"
+  | "order.delivered"
+  | "order.refunded"
+  | "stock.low"
+  | "message.received"
+  | "auth.login_alert";
+
+export type EmailTemplate = {
+  slug: string;
+  name: string;
+  category: "compte" | "commande" | "suivi" | "marketing" | "admin";
+  subject: string;
+  bodyHtml: string;
+  variables: string[];
+};
+
+export type EmailLog = {
+  id: string;
+  event: string;
+  recipient: string;
+  subject: string;
+  templateSlug: string;
+  status: "envoye" | "en_attente" | "echec";
+  sentAt: string;
+  errorMessage?: string;
+  idempotencyKey: string;
+};
+
+export type AdminRole = "owner" | "admin" | "order_manager" | "catalog_manager" | "support";
+
+export type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: AdminRole;
+  active: boolean;
+  lastLoginAt?: string;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  timestamp: string;
+  userId: string;
+  userName: string;
+  action: string;
+  resource: string;
+  details: string;
 };
 
 export type Subscriber = { id: string; email: string; createdAt: string };
@@ -249,6 +396,11 @@ export type StoreData = {
   orders: Order[];
   subscribers: Subscriber[];
   messages: ContactMessage[];
+  promoCodes?: PromoCode[];
+  emailTemplates?: EmailTemplate[];
+  emailLogs?: EmailLog[];
+  auditLogs?: AuditLogEntry[];
+  adminUsers?: AdminUser[];
 };
 
 export type CheckoutInput = {

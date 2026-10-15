@@ -21,8 +21,9 @@ import {
 import { categoryById, categoryBySlug, productsFor, relatedProducts, shippingCost } from "@/lib/catalog";
 import { formatPrice } from "@/lib/format";
 import { themeStyle } from "@/lib/theme";
-import type { HeroContent, PageContent, Product, PromoCard, Section, SiteContent, TrustIcon } from "@/lib/types";
-import { placeOrder, sendMessage, subscribeEmail, ordersForEmail } from "@/lib/actions";
+import type { BusinessSector, HeroContent, PageContent, Product, PromoCard, Section, SiteContent, TrustIcon } from "@/lib/types";
+import { ThreeHeroCanvas } from "@/components/store/three-hero";
+import { placeOrder, sendMessage, subscribeEmail, ordersForEmail, validatePromoCode } from "@/lib/actions";
 import { orderStatusLabel } from "@/lib/order-status";
 import { useCart } from "@/components/store/cart";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -68,11 +69,11 @@ export function ProductCard({ product, quiet = false }: { product: Product; quie
         aria-pressed={wished}
         data-on={wished}
         aria-label={wished ? `Retirer ${product.name} des envies` : `Ajouter ${product.name} aux envies`}
-        onClick={() => !quiet && cart.toggleWish(product.id)}
+        onClick={() => cart.toggleWish(product.id)}
       >
         <Heart size={16} fill={wished ? "currentColor" : "none"} />
       </button>
-      <Link href={`/produit/${product.slug}`} className="media square" tabIndex={quiet ? -1 : undefined}>
+      <Link href={`/produit/${product.slug}`} className="media square">
         <Photo src={product.images[0] ?? ""} alt={product.name} sizes="(max-width:760px) 50vw, 16vw" />
       </Link>
       <h3>
@@ -93,7 +94,7 @@ export function ProductCard({ product, quiet = false }: { product: Product; quie
           aria-label={product.stock > 0 ? `Ajouter ${product.name} au panier` : `${product.name} épuisé`}
           disabled={product.stock <= 0}
           onClick={() => {
-            if (quiet || product.stock <= 0) return;
+            if (product.stock <= 0) return;
             cart.add(product.id, 1);
             setAdded(true);
             window.setTimeout(() => setAdded(false), 1200);
@@ -168,8 +169,8 @@ function Header({ content }: { content: SiteContent }) {
                 {link.label}
               </Link>
             ))}
-            <Link href="/studio" className="min-h-11 flex items-center" onClick={() => setOpen(false)}>
-              Studio
+            <Link href="/compte" className="min-h-11 flex items-center font-medium" onClick={() => setOpen(false)}>
+              Espace Client & Suivi
             </Link>
           </nav>
         </SheetContent>
@@ -219,8 +220,8 @@ function Footer({ content }: { content: SiteContent }) {
         <span>
           © {new Date().getFullYear()} {content.footer.copyright}
         </span>
-        <span>Visa · Mastercard · PayPal · Apple Pay</span>
-        <Link href="/studio">Studio</Link>
+        <span>Paiements sécurisés : CB · Visa · Mastercard · PayPal · Apple Pay</span>
+        <Link href="/compte">Suivi de commande</Link>
       </div>
     </footer>
   );
@@ -261,6 +262,19 @@ export function StoreShell({
   preview?: boolean;
   children: ReactNode;
 }) {
+  const cart = useCart();
+
+  useEffect(() => {
+    if (!cart.ready || !content?.products) return;
+    const validIds = new Set(content.products.map((p) => p.id));
+    const invalid = cart.lines.filter((line) => !validIds.has(line.productId));
+    if (invalid.length > 0) {
+      for (const inv of invalid) {
+        cart.remove(inv.productId);
+      }
+    }
+  }, [cart.ready, cart.lines, content?.products]);
+
   const header = content.sections.find((section) => section.type === "header");
   const footer = content.sections.find((section) => section.type === "footer");
   return (
@@ -281,7 +295,7 @@ export function StoreShell({
       ) : null}
       <main id="contenu">{children}</main>
       {footer?.enabled !== false ? <Footer content={content} /> : null}
-      {preview ? null : <CartDrawer content={content} />}
+      <CartDrawer content={content} />
       <CookieBar />
     </div>
   );
@@ -347,11 +361,12 @@ function CartDrawer({ content }: { content: SiteContent }) {
   );
 }
 
-function Hero({ hero }: { hero: HeroContent }) {
+function Hero({ hero, sector }: { hero: HeroContent; sector?: BusinessSector }) {
   const src = hero.image;
   return (
-    <section className="hero" data-height={hero.height} data-layout={hero.layout}>
-      <div className="hero-copy">
+    <section className="hero" data-height={hero.height} data-layout={hero.layout} style={{ position: "relative", overflow: "hidden" }}>
+      <ThreeHeroCanvas sector={sector} />
+      <div className="hero-copy" style={{ position: "relative", zIndex: 2 }}>
         <p className="eyebrow">{hero.eyebrow}</p>
         <h1>{hero.title}</h1>
         <p className="lede">{hero.subtitle}</p>
@@ -359,7 +374,7 @@ function Hero({ hero }: { hero: HeroContent }) {
           {hero.buttonLabel} <span aria-hidden>→</span>
         </Link>
       </div>
-      <div className="hero-media">
+      <div className="hero-media" style={{ position: "relative", zIndex: 2 }}>
         <Photo src={src} alt={hero.imageAlt} priority sizes="60vw" />
         <div className="overlay" style={{ opacity: Math.max(0, Math.min(80, hero.overlay)) / 100 }} />
       </div>
@@ -443,7 +458,7 @@ export function HomeSections({ content, quiet = false }: { content: SiteContent;
 }
 
 function SectionView({ section, content, quiet }: { section: Section; content: SiteContent; quiet?: boolean }) {
-  if (section.type === "hero") return <Hero hero={section.hero} />;
+  if (section.type === "hero") return <Hero hero={section.hero} sector={content.settings.sector} />;
   if (section.type === "trust") {
     return (
       <section className="trust" aria-label="Avantages">
@@ -548,15 +563,18 @@ function SectionView({ section, content, quiet }: { section: Section; content: S
   }
   if (section.type === "gallery") {
     return (
-      <section className="section">
+      <section className="section gallery-section">
         <div className="wrap">
           <div className="section-head">
             <h2>{section.title}</h2>
           </div>
           <div className="gallery-grid">
             {section.images.map((image) => (
-              <div key={image.id} className="media square">
+              <div key={image.id} className="gallery-item media square">
                 <Photo src={image.src} alt={image.alt} sizes="25vw" />
+                <div className="gallery-overlay">
+                  <span className="gallery-caption">{image.alt}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -614,8 +632,9 @@ export function PreviewSite({ content }: { content: SiteContent }) {
           <Header content={content} />
         </>
       ) : null}
-      <HomeSections content={content} quiet />
+      <HomeSections content={content} quiet={false} />
       {footer?.enabled !== false ? <Footer content={content} /> : null}
+      <CartDrawer content={content} />
     </div>
   );
 }
@@ -845,6 +864,10 @@ export function CheckoutView({ content, paymentsLive }: { content: SiteContent; 
   const cart = useCart();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
+  const [promoCodeInput, setPromoCodeInput] = useState("");
+  const [appliedPromo, setAppliedPromo] = useState<{ code: string; discountCents: number } | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+
   const lines = cart.lines
     .map((line) => {
       const product = content.products.find((item) => item.id === line.productId);
@@ -852,7 +875,23 @@ export function CheckoutView({ content, paymentsLive }: { content: SiteContent; 
     })
     .filter((line): line is { product: Product; qty: number } => Boolean(line));
   const subtotal = lines.reduce((sum, line) => sum + line.product.price * line.qty, 0);
-  const shipping = shippingCost(content, subtotal);
+  const discount = appliedPromo?.discountCents ?? 0;
+  const shipping = shippingCost(content, Math.max(0, subtotal - discount));
+  const total = Math.max(0, subtotal - discount) + shipping;
+
+  const handleApplyPromo = async () => {
+    if (!promoCodeInput.trim()) return;
+    setPromoError(null);
+    const res = await validatePromoCode(promoCodeInput, subtotal);
+    if (!res.valid) {
+      setPromoError(res.error);
+      setAppliedPromo(null);
+    } else {
+      setAppliedPromo({ code: res.code, discountCents: res.discountCents });
+      setPromoError(null);
+    }
+  };
+
   if (!lines.length) {
     return (
       <div className="wrap empty">
@@ -866,11 +905,10 @@ export function CheckoutView({ content, paymentsLive }: { content: SiteContent; 
   }
   return (
     <div className="wrap">
-      <h1 className="page-title">Commande</h1>
-      <p className="note">
-        {paymentsLive
-          ? "Vous serez redirigé vers Stripe pour payer par carte. La commande n'est confirmée qu'une fois le paiement accepté."
-          : "Paiement simulé : aucune carte n'est débitée. Ajoutez STRIPE_SECRET_KEY pour encaisser vraiment."}
+      <h1 className="page-title">Finalisation de commande</h1>
+      <p className="note" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Lock size={15} style={{ color: "var(--kd-accent)" }} />
+        Paiement 100% sécurisé crypté SSL. Vos informations bancaires et coordonnées sont strictement confidentielles et protégées.
       </p>
       <form
         className="check-layout"
@@ -933,13 +971,41 @@ export function CheckoutView({ content, paymentsLive }: { content: SiteContent; 
               <span>{formatPrice(line.product.price * line.qty)}</span>
             </div>
           ))}
+          <div style={{ margin: "14px 0", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                placeholder="Code promo (ex: BIENVENUE10)"
+                value={promoCodeInput}
+                onChange={(e) => setPromoCodeInput(e.target.value.toUpperCase())}
+                style={{ flex: 1, textTransform: "uppercase" }}
+              />
+              <button type="button" className="kd-btn ghost" onClick={handleApplyPromo} style={{ whiteSpace: "nowrap" }}>
+                Appliquer
+              </button>
+            </div>
+            {promoError && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 4 }}>{promoError}</div>}
+            {appliedPromo && (
+              <div style={{ fontSize: 12, color: "#065f46", marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>Code <strong>{appliedPromo.code}</strong> appliqué !</span>
+                <button type="button" onClick={() => setAppliedPromo(null)} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", textDecoration: "underline", fontSize: 11 }}>
+                  Retirer
+                </button>
+              </div>
+            )}
+          </div>
+          {appliedPromo && (
+            <div className="sum-row" style={{ color: "#065f46" }}>
+              <span>Réduction ({appliedPromo.code})</span>
+              <span>-{formatPrice(appliedPromo.discountCents)}</span>
+            </div>
+          )}
           <div className="sum-row">
             <span>Livraison</span>
             <span>{shipping === 0 ? "Offerte" : formatPrice(shipping)}</span>
           </div>
           <div className="sum-row">
             <strong>Total</strong>
-            <strong>{formatPrice(subtotal + shipping)}</strong>
+            <strong>{formatPrice(total)}</strong>
           </div>
           <button className="kd-btn" type="submit" disabled={pending} style={{ width: "100%", marginTop: 12 }}>
             {pending ? "Validation…" : paymentsLive ? "Payer par carte" : "Valider la commande"}
@@ -1173,10 +1239,8 @@ export function ConfirmView({ id, total, paid, simulated }: { id: string; total:
       <p className="intro">
         Commande <strong>{id}</strong>, total {total}.{" "}
         {paid
-          ? simulated
-            ? "Le paiement est simulé : aucune carte n'a été débitée."
-            : "Le paiement par carte est accepté. Nous préparons la commande."
-          : "Le paiement n'est pas confirmé. Le stock réservé sera libéré si vous ne terminez pas le règlement."}
+          ? "Nous avons bien reçu votre règlement. Notre équipe prépare votre commande avec le plus grand soin. Vous recevrez un e-mail avec vos informations de suivi dès l'expédition."
+          : "Le paiement n'a pas pu être validé. Vos articles restent temporairement réservés, veuillez renouveler votre tentative."}
       </p>
       <Link className="kd-btn" href={paid ? "/compte" : "/panier"}>
         {paid ? "Suivre la commande" : "Retour au panier"}

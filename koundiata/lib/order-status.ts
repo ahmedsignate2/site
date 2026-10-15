@@ -8,6 +8,8 @@ export const orderStatusLabel: Record<OrderStatus, string> = {
   livree: "Livrée",
   annulee: "Annulée",
   echouee: "Paiement échoué",
+  remboursee_partiel: "Remboursée partiellement",
+  remboursee_total: "Remboursée totalement",
 };
 
 export function countsAsSale(status: OrderStatus) {

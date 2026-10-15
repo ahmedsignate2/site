@@ -7,7 +7,10 @@ import { createCardCheckout, getStripe, simulatedAuthorization, stripeEnabled } 
 import { shippingCost } from "@/lib/catalog";
 import { restoreStock, takeStock } from "@/lib/stock";
 import { readStore, updateStore } from "@/lib/store";
-import type { CheckoutInput, OrderItem, OrderStatus, SiteContent } from "@/lib/types";
+import { dispatchAutomation } from "@/lib/automation";
+import { logAuditEvent } from "@/lib/audit";
+import { SECTOR_PRESETS } from "@/lib/sectors";
+import type { BusinessSector, CheckoutInput, OrderItem, OrderStatus, PromoCode, SiteContent } from "@/lib/types";
 
 function touch() {
   revalidatePath("/", "layout");
@@ -67,7 +70,9 @@ export async function placeOrder(input: CheckoutInput) {
     let shipping = 0;
     await updateStore((data) => {
       items = input.items.map((line) => {
-        const product = data.published.products.find((item) => item.id === line.productId);
+        const product =
+          data.published.products.find((item) => item.id === line.productId) ||
+          data.draft.products.find((item) => item.id === line.productId);
         if (!product) throw new Error("Produit introuvable.");
         if (line.qty < 1 || line.qty > 8) throw new Error("Quantité invalide.");
         return {
@@ -106,7 +111,17 @@ export async function placeOrder(input: CheckoutInput) {
         total: subtotal + shipping,
       });
     });
+
     if (!liveCard) {
+      dispatchAutomation("order.created", input.email.trim().toLowerCase(), {
+        order_id: orderId,
+        customer_name: `${input.firstName} ${input.lastName}`,
+        total_amount: `${((subtotal + shipping) / 100).toFixed(2)} €`,
+        shipping_address: `${input.address}, ${input.postal} ${input.city}`,
+        brand_name: "KOUNDIATA",
+        support_email: "bonjour@koundiata.fr",
+      }).catch(() => {});
+      logAuditEvent("order.created", "Commandes", `Nouvelle commande simulée ${orderId} (${((subtotal + shipping) / 100).toFixed(2)} €)`).catch(() => {});
       await simulatedAuthorization(subtotal + shipping, orderId);
       touch();
       return { ok: true as const, orderId, redirectUrl: null as string | null };
@@ -138,12 +153,217 @@ export async function placeOrder(input: CheckoutInput) {
 }
 
 export async function updateOrderStatus(id: string, status: OrderStatus) {
+  let customerEmail = "";
+  let customerName = "";
+  let brand = "Boutique";
   await updateStore((data) => {
     const order = data.orders.find((item) => item.id === id);
     if (!order) return;
     if ((status === "annulee" || status === "echouee") && order.stockHeld) restoreStock(data, order);
     order.status = status;
+    customerEmail = order.customer.email;
+    customerName = order.customer.firstName;
+    brand = data.published.settings.brandName;
   });
+  if (customerEmail && status === "expediee") {
+    dispatchAutomation("order.shipped", customerEmail, {
+      order_id: id,
+      customer_name: customerName,
+      carrier: "Colissimo",
+      tracking_number: `6A${id.replace(/[^0-9]/g, "")}FR`,
+      tracking_url: "https://www.laposte.fr",
+      brand_name: brand,
+    }).catch(() => {});
+  }
+  logAuditEvent("order.status", "Commandes", `Statut de la commande ${id} mis à jour : ${status}`).catch(() => {});
+  touch();
+}
+
+export async function updateOrderShipping(
+  id: string,
+  carrier: string,
+  trackingNumber: string,
+  trackingUrl?: string,
+) {
+  let customerEmail = "";
+  let customerName = "";
+  let brand = "Boutique";
+  await updateStore((data) => {
+    const order = data.orders.find((item) => item.id === id);
+    if (!order) return;
+    order.status = "expediee";
+    order.shippingDetails = {
+      carrier: carrier.trim(),
+      trackingNumber: trackingNumber.trim(),
+      trackingUrl: trackingUrl?.trim() || `https://www.laposte.fr/outils/suivre-vos-envois?code=${trackingNumber.trim()}`,
+      shippedAt: new Date().toISOString(),
+    };
+    customerEmail = order.customer.email;
+    customerName = order.customer.firstName;
+    brand = data.published.settings.brandName;
+  });
+  if (customerEmail) {
+    dispatchAutomation("order.shipped", customerEmail, {
+      order_id: id,
+      customer_name: customerName,
+      carrier: carrier.trim(),
+      tracking_number: trackingNumber.trim(),
+      tracking_url: trackingUrl?.trim() || `https://www.laposte.fr/outils/suivre-vos-envois?code=${trackingNumber.trim()}`,
+      brand_name: brand,
+    }).catch(() => {});
+  }
+  logAuditEvent("order.shipping", "Expéditions", `Colis pour ${id} expédié via ${carrier} (${trackingNumber})`).catch(() => {});
+  touch();
+}
+
+export async function processOrderRefund(id: string, amountCents: number, reason: string) {
+  let customerEmail = "";
+  let customerName = "";
+  let brand = "Boutique";
+  await updateStore((data) => {
+    const order = data.orders.find((item) => item.id === id);
+    if (!order) return;
+    if (!order.refunds) order.refunds = [];
+    order.refunds.push({
+      id: uid("ref"),
+      amount: amountCents,
+      reason: reason.trim(),
+      date: new Date().toISOString(),
+      stripeRefundId: `re_sim_${Date.now()}`,
+    });
+    const totalRefunded = order.refunds.reduce((sum, r) => sum + r.amount, 0);
+    order.status = totalRefunded >= order.total ? "remboursee_total" : "remboursee_partiel";
+    customerEmail = order.customer.email;
+    customerName = order.customer.firstName;
+    brand = data.published.settings.brandName;
+  });
+  if (customerEmail) {
+    dispatchAutomation("order.refunded", customerEmail, {
+      order_id: id,
+      customer_name: customerName,
+      refund_amount: `${(amountCents / 100).toFixed(2)} €`,
+      refund_reason: reason.trim(),
+      brand_name: brand,
+    }).catch(() => {});
+  }
+  logAuditEvent("order.refund", "Finances", `Remboursement de ${(amountCents / 100).toFixed(2)} € sur commande ${id} (Motif: ${reason})`).catch(() => {});
+  touch();
+}
+
+export async function validatePromoCode(code: string, subtotalCents: number) {
+  const data = await readStore();
+  const clean = code.trim().toUpperCase();
+  const promo = (data.promoCodes || []).find((p) => p.code.toUpperCase() === clean && p.active);
+  if (!promo) return { valid: false as const, error: "Code promotionnel invalide ou inactif." };
+  if (subtotalCents < promo.minPurchaseCents) {
+    return {
+      valid: false as const,
+      error: `Minimum d'achat de ${(promo.minPurchaseCents / 100).toFixed(2)} € requis pour ce code.`,
+    };
+  }
+  const discountCents =
+    promo.discountType === "percent"
+      ? Math.round((subtotalCents * promo.discountValue) / 100)
+      : Math.min(subtotalCents, promo.discountValue);
+  return { valid: true as const, code: promo.code, discountCents };
+}
+
+export async function switchSectorPreset(sector: BusinessSector) {
+  const config = SECTOR_PRESETS[sector];
+  if (!config) return;
+  await updateStore((data) => {
+    data.draft.settings.sector = sector;
+    data.draft.settings.brandName = config.brandName;
+    data.draft.settings.tagline = config.tagline;
+    data.draft.settings.announcement = config.announcement;
+    data.draft.theme = { ...data.draft.theme, ...config.theme };
+    data.draft.categories = config.categories;
+    data.draft.products = config.sampleProducts;
+
+    const heroSec = data.draft.sections.find((s) => s.type === "hero");
+    if (heroSec && "hero" in heroSec) {
+      heroSec.hero = config.hero;
+    }
+
+    const promoSec = data.draft.sections.find((s) => s.type === "promos");
+    if (promoSec && "cards" in promoSec) {
+      promoSec.cards = config.promos;
+    }
+
+    const trustSec = data.draft.sections.find((s) => s.type === "trust");
+    if (trustSec && "items" in trustSec) {
+      trustSec.items = config.trustItems;
+    }
+
+    const gallerySec = data.draft.sections.find((s) => s.type === "gallery");
+    if (gallerySec && "images" in gallerySec && config.gallery) {
+      gallerySec.title = config.gallery.title;
+      gallerySec.images = config.gallery.images;
+    }
+
+    data.draft.about = config.about;
+    data.draft.footer.blurb = config.footerBlurb;
+
+    const navBase = data.draft.navigation.filter((n) => !n.href.startsWith("/boutique/"));
+    const catLinks = config.categories.slice(0, 5).map((cat) => ({
+      id: `n-${cat.slug}`,
+      label: cat.name.split("&")[0].trim(),
+      href: `/boutique/${cat.slug}`,
+    }));
+    const shopIdx = navBase.findIndex((n) => n.href === "/boutique");
+    if (shopIdx >= 0) {
+      data.draft.navigation = [
+        ...navBase.slice(0, shopIdx + 1),
+        ...catLinks,
+        ...navBase.slice(shopIdx + 1),
+      ];
+    }
+  });
+  logAuditEvent("sector.switch", "Theme Studio", `Bascule de l'univers de marque vers le secteur : ${config.name} (${config.brandName})`).catch(() => {});
+  touch();
+}
+
+export async function sendTestAutomationEmail(templateSlug: string, recipient: string) {
+  const log = await dispatchAutomation(
+    "order.created",
+    recipient,
+    {
+      order_id: "KD-98214",
+      customer_name: "Ahmed (Test Studio)",
+      total_amount: "49,90 €",
+      carrier: "Colissimo Suivi",
+      tracking_number: "6A98214567FR",
+      tracking_url: "https://www.laposte.fr",
+      refund_amount: "24,90 €",
+      refund_reason: "Démonstration remboursement",
+      product_name: "Sérum Éclat Niacinamide",
+      product_sku: "KD-SR-30",
+      stock_remaining: "2",
+      stock_threshold: "10",
+      reorder_qty: "50",
+      studio_product_url: "/studio/produits",
+      brand_name: "Koundiata OS",
+      support_email: "support@koundiata.fr",
+      shipping_address: "14 Boulevard Haussmann, 75009 Paris",
+    },
+    templateSlug,
+  );
+  logAuditEvent("automation.test_email", "Automatisations", `E-mail de test (${templateSlug}) envoyé à ${recipient}`).catch(() => {});
+  touch();
+  return log;
+}
+
+export async function savePromoCode(promo: PromoCode) {
+  await updateStore((data) => {
+    if (!data.promoCodes) data.promoCodes = [];
+    const idx = data.promoCodes.findIndex((p) => p.code.toUpperCase() === promo.code.toUpperCase());
+    if (idx >= 0) {
+      data.promoCodes[idx] = promo;
+    } else {
+      data.promoCodes.unshift(promo);
+    }
+  });
+  logAuditEvent("promo.save", "Promotions", `Code promo ${promo.code} enregistré (${promo.discountType === "percent" ? promo.discountValue + "%" : (promo.discountValue / 100).toFixed(2) + " €"})`).catch(() => {});
   touch();
 }
 
@@ -161,19 +381,55 @@ export async function releaseUnpaidOrder(id: string) {
     const order = data.orders.find((item) => item.id === id);
     if (!order || order.status !== "en_attente") return;
     restoreStock(data, order);
-    order.status = "annulee";
-    if (order.payment) order.payment.status = "failed";
+    // Remove unpaid abandoned checkout so it never creates phantom orders in dashboard
+    data.orders = data.orders.filter((item) => item.id !== id);
   });
   touch();
 }
 
+export async function clearAllOrders() {
+  await updateStore((data) => {
+    for (const order of data.orders) {
+      if (order.stockHeld) {
+        restoreStock(data, order);
+      }
+    }
+    data.orders = [];
+  });
+  logAuditEvent("order.clear", "Commandes", "Toutes les commandes de test ont été effacées").catch(() => {});
+  touch();
+}
+
 export async function markOrderPaid(id: string, reference: string) {
+  let customerEmail = "";
+  let customerName = "";
+  let brand = "Boutique";
+  let totalFormatted = "";
+  let shippingAddress = "";
+
   await updateStore((data) => {
     const order = data.orders.find((item) => item.id === id);
     if (!order || order.status !== "en_attente") return;
     order.status = "payee";
     order.payment = { provider: "stripe", status: "authorized", reference };
+    customerEmail = order.customer.email;
+    customerName = `${order.customer.firstName} ${order.customer.lastName}`;
+    brand = data.published.settings.brandName;
+    totalFormatted = `${((order.total) / 100).toFixed(2)} €`;
+    shippingAddress = `${order.customer.address}, ${order.customer.postal} ${order.customer.city}`;
   });
+
+  if (customerEmail) {
+    dispatchAutomation("order.created", customerEmail, {
+      order_id: id,
+      customer_name: customerName,
+      total_amount: totalFormatted,
+      shipping_address: shippingAddress,
+      brand_name: brand,
+      support_email: "bonjour@koundiata.fr",
+    }).catch(() => {});
+    logAuditEvent("order.paid", "Commandes", `Paiement Stripe confirmé pour ${id} (${totalFormatted})`).catch(() => {});
+  }
   touch();
 }
 

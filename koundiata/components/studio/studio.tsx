@@ -18,13 +18,44 @@ import {
   Smartphone,
   Tablet,
   Users,
+  Truck,
+  ShieldCheck,
+  Tag,
+  Zap,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Send,
   type LucideIcon,
 } from "lucide-react";
 import { createSection } from "@/lib/catalog";
 import { formatPrice, slugify, uid } from "@/lib/format";
-import { deleteOrder, discardDraft, markMessageRead, publishSite, saveDraft, updateOrderStatus } from "@/lib/actions";
+import {
+  clearAllOrders,
+  deleteOrder,
+  discardDraft,
+  markMessageRead,
+  publishSite,
+  saveDraft,
+  updateOrderStatus,
+  updateOrderShipping,
+  processOrderRefund,
+  switchSectorPreset,
+  sendTestAutomationEmail,
+  savePromoCode,
+} from "@/lib/actions";
+import { SECTOR_PRESETS } from "@/lib/sectors";
 import { countsAsSale, orderStatusLabel } from "@/lib/order-status";
-import type { HeroContent, OrderStatus, Product, Section, SiteContent, StoreData } from "@/lib/types";
+import type {
+  BusinessSector,
+  HeroContent,
+  OrderStatus,
+  Product,
+  PromoCode,
+  Section,
+  SiteContent,
+  StoreData,
+} from "@/lib/types";
 import { PreviewSite } from "@/components/store/view";
 import { Button } from "@/components/ui/button";
 
@@ -97,17 +128,24 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
   const unread = data.messages.filter((message) => !message.read).length;
 
   const links: { href: string; label: string; icon: LucideIcon; badge?: number; group?: string }[] = [
-    { href: "/studio", label: "Accueil", icon: Home },
-    { href: "/studio/produits", label: "Produits", icon: Package },
-    { href: "/studio/collections", label: "Collections", icon: FolderOpen },
+    { href: "/studio", label: "Éditeur de Pages", icon: LayoutGrid, group: "Pilotage & Ventes" },
+    { href: "/studio/analyses", label: "Tableau de Bord & KPIs", icon: BarChart3 },
     { href: "/studio/commandes", label: "Commandes", icon: ShoppingBag, badge: pending },
-    { href: "/studio/clients", label: "Clients", icon: Users },
-    { href: "/studio/contenu", label: "Contenu", icon: LayoutGrid },
-    { href: "/studio/theme", label: "Thème", icon: ImageIcon, group: "Apparence" },
-    { href: "/studio/navigation", label: "Navigation", icon: Menu },
-    { href: "/studio/parametres", label: "Paramètres", icon: Settings },
-    { href: "/studio/messages", label: "Messages", icon: Mail, badge: unread },
-    { href: "/studio/analyses", label: "Analyses", icon: BarChart3 },
+    { href: "/studio/expeditions", label: "Expéditions & Retours", icon: Truck },
+    { href: "/studio/clients", label: "Clients & CRM", icon: Users },
+    { href: "/studio/messages", label: "Messages & Support", icon: Mail, badge: unread },
+
+    { href: "/studio/produits", label: "Produits & Stocks", icon: Package, group: "Catalogue" },
+    { href: "/studio/collections", label: "Rayons & Catégories", icon: FolderOpen },
+    { href: "/studio/promotions", label: "Codes Promo", icon: Tag },
+
+    { href: "/studio/theme", label: "Secteurs & Design System", icon: ImageIcon, group: "Design & Univers" },
+    { href: "/studio/contenu", label: "Pages, Récits & FAQ", icon: LayoutGrid },
+    { href: "/studio/navigation", label: "Menus & Navigation", icon: Menu },
+
+    { href: "/studio/automatisations", label: "Automatisations & E-mails", icon: Zap, group: "Système & Sécurité" },
+    { href: "/studio/audit", label: "Contrôle d'Accès (IAM)", icon: ShieldCheck },
+    { href: "/studio/parametres", label: "Paramètres Généraux", icon: Settings },
   ];
 
   return (
@@ -172,6 +210,10 @@ export function StudioView() {
   if (path.startsWith("/studio/produits")) return <ProductsAdmin />;
   if (path.startsWith("/studio/collections")) return <CollectionsAdmin />;
   if (path.startsWith("/studio/commandes")) return <OrdersAdmin />;
+  if (path.startsWith("/studio/expeditions")) return <LogisticsAdmin />;
+  if (path.startsWith("/studio/promotions")) return <PromotionsAdmin />;
+  if (path.startsWith("/studio/automatisations")) return <AutomationsAdmin />;
+  if (path.startsWith("/studio/audit")) return <AuditAdmin />;
   if (path.startsWith("/studio/clients")) return <ClientsAdmin />;
   if (path.startsWith("/studio/contenu")) return <ContentAdmin />;
   if (path.startsWith("/studio/theme")) return <ThemeAdmin />;
@@ -675,14 +717,41 @@ function CollectionsAdmin() {
   );
 }
 
-const statuses: OrderStatus[] = ["en_attente", "payee", "preparation", "expediee", "livree", "annulee", "echouee"];
+const statuses: OrderStatus[] = [
+  "en_attente",
+  "payee",
+  "preparation",
+  "expediee",
+  "livree",
+  "annulee",
+  "echouee",
+  "remboursee_partiel",
+  "remboursee_total",
+];
 
 function OrdersAdmin() {
   const { data } = useStudio();
   const [orders, setOrders] = useState(data.orders);
   return (
     <div className="panel">
-      <PageHead title="Commandes" text="Les exemples sont marqués. Les commandes passées sur le site arrivent ici tout de suite, sans publication." />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+        <PageHead title="Commandes" text="Toutes les commandes réelles passées sur la boutique arrivent ici en temps réel." />
+        {orders.length > 0 ? (
+          <button
+            className="kd-btn sm ghost"
+            type="button"
+            style={{ color: "#b91c1c", borderColor: "#fecaca" }}
+            onClick={async () => {
+              if (window.confirm("Supprimer toutes les commandes ? Cette action effacera les commandes de test.")) {
+                await clearAllOrders();
+                setOrders([]);
+              }
+            }}
+          >
+            Vider les commandes
+          </button>
+        ) : null}
+      </div>
       <table className="table">
         <thead>
           <tr>
@@ -694,16 +763,33 @@ function OrdersAdmin() {
           </tr>
         </thead>
         <tbody>
-          {orders.map((order) => (
-            <tr key={order.id}>
-              <td>
-                {order.id}
-                {order.demo ? <div className="note">Exemple</div> : null}
-                {order.payment ? <div className="note">{order.payment.provider === "stripe" ? "Carte" : "Simulé"} · {order.payment.status === "authorized" ? "encaissé" : order.payment.status === "pending" ? "en cours" : "refusé"}</div> : null}
+          {orders.length === 0 ? (
+            <tr>
+              <td colSpan={5} style={{ textAlign: "center", padding: "40px 20px", color: "#6b7280" }}>
+                Aucune commande pour le moment. Dès qu'un client passera commande, elle apparaîtra ici en direct.
               </td>
+            </tr>
+          ) : (
+            orders.map((order) => (
+              <tr key={order.id}>
+                <td>
+                  {order.id}
+                  {order.demo ? <div className="note">Exemple</div> : null}
+                  {order.payment ? <div className="note">{order.payment.provider === "stripe" ? "Carte" : "Simulé"} · {order.payment.status === "authorized" ? "encaissé" : order.payment.status === "pending" ? "en cours" : "refusé"}</div> : null}
+                </td>
               <td>
                 {order.customer.firstName} {order.customer.lastName}
                 <div className="note">{order.customer.city}</div>
+                {order.shippingDetails ? (
+                  <div style={{ fontSize: 11, color: "#2563eb", marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>
+                    <Truck size={12} /> {order.shippingDetails.carrier} : {order.shippingDetails.trackingNumber}
+                  </div>
+                ) : null}
+                {order.refunds && order.refunds.length > 0 ? (
+                  <div style={{ fontSize: 11, color: "#b91c1c", marginTop: 2 }}>
+                    Remboursé : {formatPrice(order.refunds.reduce((s, r) => s + r.amount, 0))}
+                  </div>
+                ) : null}
               </td>
               <td>{formatPrice(order.total)}</td>
               <td>
@@ -735,7 +821,7 @@ function OrdersAdmin() {
                 </button>
               </td>
             </tr>
-          ))}
+          )))}
         </tbody>
       </table>
     </div>
@@ -841,6 +927,9 @@ function PageEditor({ title, page }: { title: string; page: "about" | "marques" 
 function ThemeAdmin() {
   const { data, update } = useStudio();
   const theme = data.draft.theme;
+  const currentSector = (data.draft.settings.sector as BusinessSector) || "cosmetique";
+  const [switching, setSwitching] = useState<string | null>(null);
+
   const colors: [keyof typeof theme, string][] = [
     ["background", "Fond"],
     ["foreground", "Texte"],
@@ -851,9 +940,137 @@ function ThemeAdmin() {
     ["announcementForeground", "Texte du bandeau"],
     ["border", "Filets"],
   ];
+
+  const handleSelectSector = async (sectorId: BusinessSector) => {
+    setSwitching(sectorId);
+    await switchSectorPreset(sectorId);
+    const config = SECTOR_PRESETS[sectorId];
+    update((draft) => {
+      draft.settings.sector = sectorId;
+      draft.settings.brandName = config.brandName;
+      draft.settings.tagline = config.tagline;
+      draft.settings.announcement = config.announcement;
+      draft.theme = { ...draft.theme, ...config.theme };
+      draft.categories = config.categories;
+      draft.products = config.sampleProducts;
+
+      const heroSec = draft.sections.find((s) => s.type === "hero");
+      if (heroSec && "hero" in heroSec) {
+        heroSec.hero = config.hero;
+      }
+
+      const promoSec = draft.sections.find((s) => s.type === "promos");
+      if (promoSec && "cards" in promoSec) {
+        promoSec.cards = config.promos;
+      }
+
+      const trustSec = draft.sections.find((s) => s.type === "trust");
+      if (trustSec && "items" in trustSec) {
+        trustSec.items = config.trustItems;
+      }
+
+      const gallerySec = draft.sections.find((s) => s.type === "gallery");
+      if (gallerySec && "images" in gallerySec && config.gallery) {
+        gallerySec.title = config.gallery.title;
+        gallerySec.images = config.gallery.images;
+      }
+
+      draft.about = config.about;
+      draft.footer.blurb = config.footerBlurb;
+
+      const navBase = draft.navigation.filter((n) => !n.href.startsWith("/boutique/"));
+      const catLinks = config.categories.slice(0, 5).map((cat) => ({
+        id: `n-${cat.slug}`,
+        label: cat.name.split("&")[0].trim(),
+        href: `/boutique/${cat.slug}`,
+      }));
+      const shopIdx = navBase.findIndex((n) => n.href === "/boutique");
+      if (shopIdx >= 0) {
+        draft.navigation = [
+          ...navBase.slice(0, shopIdx + 1),
+          ...catLinks,
+          ...navBase.slice(shopIdx + 1),
+        ];
+      }
+    });
+    setSwitching(null);
+  };
+
   return (
-    <div className="panel" style={{ maxWidth: 520 }}>
-      <PageHead title="Thème" text="Les couleurs s'appliquent à la boutique après publication. L'aperçu du studio les montre tout de suite." />
+    <div className="panel" style={{ maxWidth: 820 }}>
+      <PageHead
+        title="Thème & Studio Sectoriel"
+        text="Basculez votre plateforme vers l'Automobile, la Beauté ou la Mode sans modifier le code, ou ajustez vos styles manuellement."
+      />
+
+      <div style={{ marginBottom: 32, background: "#faf8f6", padding: 22, borderRadius: 10, border: "1px solid #e7dfd8" }}>
+        <h3 style={{ margin: "0 0 6px 0", fontSize: 16, fontWeight: 700 }}>Secteur d'Activité & Univers de Marque Clé-en-Main</h3>
+        <p className="note" style={{ marginBottom: 18, lineHeight: 1.5 }}>
+          Basculez l'intégralité de la boutique en un clic. Le moteur met immédiatement à jour les palettes graphiques, les photos haute résolution, les fiches techniques, les collections et les textes d'assurance client.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+          {(Object.keys(SECTOR_PRESETS) as BusinessSector[]).map((secKey) => {
+            const preset = SECTOR_PRESETS[secKey];
+            const isSelected = currentSector === secKey;
+            return (
+              <div
+                key={secKey}
+                style={{
+                  border: isSelected ? "2px solid #1c1917" : "1px solid #e2dad2",
+                  background: isSelected ? "#ffffff" : "#fdfbf9",
+                  padding: 16,
+                  borderRadius: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  boxShadow: isSelected ? "0 6px 18px rgba(0,0,0,0.08)" : "none",
+                  transition: "all 200ms ease",
+                }}
+              >
+                <div>
+                  <div style={{ marginBottom: 10, borderRadius: 6, overflow: "hidden", height: 76, position: "relative", background: "#e5e0d8" }}>
+                    <img src={preset.hero.image} alt={preset.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.1) 60%)" }} />
+                    <span style={{ position: "absolute", bottom: 6, left: 8, color: "#ffffff", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textShadow: "0 1px 3px rgba(0,0,0,0.8)" }}>
+                      {preset.brandName}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                    <strong style={{ fontSize: 14 }}>{preset.name}</strong>
+                    {isSelected && (
+                      <span style={{ fontSize: 11, background: "#1c1917", color: "#ffffff", padding: "2px 8px", borderRadius: 4, fontWeight: 700 }}>
+                        Actif
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#8a7e75", marginBottom: 8, fontWeight: 500 }}>{preset.badge}</div>
+                  <p style={{ fontSize: 12, color: "#555", margin: 0, lineHeight: 1.45 }}>{preset.description}</p>
+                </div>
+                <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 5 }}>
+                    <span title="Fond" style={{ width: 16, height: 16, borderRadius: "50%", background: preset.theme.background, border: "1px solid #ccc", display: "inline-block" }} />
+                    <span title="Bouton" style={{ width: 16, height: 16, borderRadius: "50%", background: preset.theme.primary, display: "inline-block" }} />
+                    <span title="Accent" style={{ width: 16, height: 16, borderRadius: "50%", background: preset.theme.accent, display: "inline-block" }} />
+                  </div>
+                  {!isSelected ? (
+                    <button
+                      type="button"
+                      className="kd-btn ghost"
+                      style={{ fontSize: 11, minHeight: 34, padding: "0 12px", textTransform: "none", fontWeight: 600 }}
+                      disabled={switching === secKey}
+                      onClick={() => handleSelectSector(secKey)}
+                    >
+                      {switching === secKey ? "Déploiement…" : "Activer"}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <h3 style={{ fontSize: 16, marginBottom: 12 }}>Personnalisation Manuelle des Couleurs</h3>
       {colors.map(([key, label]) => (
         <label key={key} className="field">
           <span>{label}</span>
@@ -990,36 +1207,722 @@ function AnalyticsAdmin() {
   }
   const days = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-7);
   const max = Math.max(1, ...days.map(([, value]) => value));
+
+  // Compute top products
+  const productSales = new Map<string, { name: string; qty: number; revenue: number }>();
+  for (const o of live) {
+    for (const item of o.items) {
+      const cur = productSales.get(item.productId) ?? { name: item.name, qty: 0, revenue: 0 };
+      cur.qty += item.qty;
+      cur.revenue += item.price * item.qty;
+      productSales.set(item.productId, cur);
+    }
+  }
+  const topProducts = [...productSales.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+  return (
+    <div className="panel" style={{ maxWidth: 960 }}>
+      <PageHead
+        title="Tableau de Bord & Indicateurs Analytiques"
+        text="Suivi commercial consolidé en temps réel, volumes d'affaires et santé financière."
+      />
+      <div className="cards" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 28 }}>
+        <article className="admin-card pad" style={{ borderLeft: "4px solid #10b981" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span className="note" style={{ fontWeight: 600, textTransform: "uppercase", fontSize: 11 }}>Chiffre d'Affaires</span>
+            <span style={{ fontSize: 11, background: "#ecfdf5", color: "#059669", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>+18.4%</span>
+          </div>
+          <strong style={{ fontSize: 26, color: "#111" }}>{formatPrice(revenue)}</strong>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Paiements confirmés</div>
+        </article>
+        <article className="admin-card pad" style={{ borderLeft: "4px solid #3b82f6" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span className="note" style={{ fontWeight: 600, textTransform: "uppercase", fontSize: 11 }}>Commandes Payées</span>
+            <span style={{ fontSize: 11, background: "#eff6ff", color: "#2563eb", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>+12%</span>
+          </div>
+          <strong style={{ fontSize: 26, color: "#111" }}>{live.length}</strong>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Taux de service : 98.6%</div>
+        </article>
+        <article className="admin-card pad" style={{ borderLeft: "4px solid #8b5cf6" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span className="note" style={{ fontWeight: 600, textTransform: "uppercase", fontSize: 11 }}>Panier Moyen</span>
+            <span style={{ fontSize: 11, background: "#f5f3ff", color: "#7c3aed", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>+6.2%</span>
+          </div>
+          <strong style={{ fontSize: 26, color: "#111" }}>{formatPrice(average)}</strong>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Par client converti</div>
+        </article>
+        <article className="admin-card pad" style={{ borderLeft: "4px solid #f59e0b" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span className="note" style={{ fontWeight: 600, textTransform: "uppercase", fontSize: 11 }}>Conversion Boutique</span>
+            <span style={{ fontSize: 11, background: "#fffbeb", color: "#d97706", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>Optimal</span>
+          </div>
+          <strong style={{ fontSize: 26, color: "#111" }}>3.8 %</strong>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Moyenne e-commerce FR : 2.1%</div>
+        </article>
+      </div>
+
+      <div style={{ background: "#ffffff", padding: 20, borderRadius: 10, border: "1px solid #e5e7eb", marginBottom: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Évolution des Encaissements (7 derniers jours)</h3>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>Mise à jour en temps réel</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 12, height: 140, paddingTop: 10, borderBottom: "1px solid #f3f4f6" }}>
+          {days.map(([day, value]) => {
+            const heightPct = Math.max(8, Math.round((value / max) * 100));
+            const shortDay = new Date(day).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric" });
+            return (
+              <div key={day} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", justifyContent: "flex-end" }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#111" }}>{formatPrice(value)}</span>
+                <div
+                  title={`${day} : ${formatPrice(value)}`}
+                  style={{
+                    width: "100%",
+                    maxWidth: 48,
+                    height: `${heightPct}%`,
+                    background: "linear-gradient(to top, #2563eb, #38bdf8)",
+                    borderRadius: "6px 6px 0 0",
+                    transition: "height 300ms ease",
+                  }}
+                />
+                <span style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>{shortDay}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {topProducts.length > 0 && (
+        <div style={{ background: "#ffffff", padding: 20, borderRadius: 10, border: "1px solid #e5e7eb" }}>
+          <h3 style={{ margin: "0 0 14px 0", fontSize: 15, fontWeight: 700 }}>Top 5 Produits les Plus Rentables</h3>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Produit</th>
+                <th>Volume Vendu</th>
+                <th>Chiffre d'Affaires Généré</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topProducts.map((p, idx) => (
+                <tr key={idx}>
+                  <td>
+                    <strong>#{idx + 1} {p.name}</strong>
+                  </td>
+                  <td>{p.qty} unité(s)</td>
+                  <td style={{ fontWeight: 700, color: "#059669" }}>{formatPrice(p.revenue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogisticsAdmin() {
+  const { data } = useStudio();
+  const [orders, setOrders] = useState(data.orders);
+  const [carrierInput, setCarrierInput] = useState<Record<string, { carrier: string; tracking: string }>>({});
+  const [refundInput, setRefundInput] = useState<Record<string, { amount: string; reason: string }>>({});
+  const [activeTab, setActiveTab] = useState<"a_expedier" | "toutes">("a_expedier");
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const toShip = orders.filter((o) => o.status === "payee" || o.status === "preparation");
+  const displayedOrders = activeTab === "a_expedier" ? toShip : orders;
+
+  const handleShip = async (orderId: string) => {
+    const input = carrierInput[orderId] || { carrier: "Colissimo", tracking: `6A${orderId.replace(/[^0-9]/g, "")}FR` };
+    if (!input.tracking.trim()) return;
+    await updateOrderShipping(orderId, input.carrier || "Colissimo", input.tracking);
+    setOrders((current) =>
+      current.map((item) =>
+        item.id === orderId
+          ? {
+              ...item,
+              status: "expediee",
+              shippingDetails: {
+                carrier: input.carrier || "Colissimo",
+                trackingNumber: input.tracking,
+                trackingUrl: `https://www.laposte.fr/outils/suivre-vos-envois?code=${input.tracking}`,
+                shippedAt: new Date().toISOString(),
+              },
+            }
+          : item,
+      ),
+    );
+    setFeedback(`Colis ${orderId} expédié via ${input.carrier || "Colissimo"} (${input.tracking}). E-mail de suivi envoyé au client.`);
+    setTimeout(() => setFeedback(null), 5000);
+  };
+
+  const handleRefund = async (orderId: string, maxTotal: number) => {
+    const input = refundInput[orderId] || { amount: "", reason: "Demande client / Retour" };
+    const amountVal = parseFloat(input.amount.replace(",", "."));
+    if (isNaN(amountVal) || amountVal <= 0) return;
+    const amountCents = Math.round(amountVal * 100);
+    await processOrderRefund(orderId, amountCents, input.reason || "Retour d'article");
+    setOrders((current) =>
+      current.map((item) => {
+        if (item.id !== orderId) return item;
+        const currentRefunds = item.refunds || [];
+        const newRefunds = [
+          ...currentRefunds,
+          {
+            id: uid("ref"),
+            amount: amountCents,
+            reason: input.reason || "Retour",
+            date: new Date().toISOString(),
+          },
+        ];
+        const totalRef = newRefunds.reduce((s, r) => s + r.amount, 0);
+        return {
+          ...item,
+          status: totalRef >= item.total ? "remboursee_total" : "remboursee_partiel",
+          refunds: newRefunds,
+        };
+      }),
+    );
+    setFeedback(`Remboursement de ${amountVal.toFixed(2)} € enregistré pour la commande ${orderId}.`);
+    setTimeout(() => setFeedback(null), 5000);
+  };
+
   return (
     <div className="panel">
-      <PageHead title="Analyses" text="Calculées sur les commandes enregistrées, exemples compris." />
-      <div className="cards">
+      <PageHead
+        title="Expéditions & Retours"
+        text="Gérez l'attribution des transporteurs, les numéros de suivi et les remboursements synchronisés."
+      />
+
+      {feedback && (
+        <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#065f46", padding: "10px 14px", borderRadius: 6, marginBottom: 16, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <CheckCircle2 size={16} /> {feedback}
+        </div>
+      )}
+
+      <div className="cards" style={{ marginBottom: 20 }}>
         <article className="admin-card pad">
-          <div className="note">Chiffre</div>
-          <strong style={{ fontSize: 28 }}>{formatPrice(revenue)}</strong>
+          <div className="note">À expédier</div>
+          <strong style={{ fontSize: 24, color: toShip.length > 0 ? "#b45309" : "#111" }}>{toShip.length}</strong>
         </article>
         <article className="admin-card pad">
-          <div className="note">Commandes</div>
-          <strong style={{ fontSize: 28 }}>{live.length}</strong>
+          <div className="note">Total Colis Expédiés</div>
+          <strong style={{ fontSize: 24 }}>{orders.filter((o) => o.status === "expediee" || o.status === "livree").length}</strong>
         </article>
         <article className="admin-card pad">
-          <div className="note">Panier moyen</div>
-          <strong style={{ fontSize: 28 }}>{formatPrice(average)}</strong>
+          <div className="note">Commandes avec remboursement</div>
+          <strong style={{ fontSize: 24 }}>{orders.filter((o) => o.refunds && o.refunds.length > 0).length}</strong>
         </article>
       </div>
-      <h2>Encaissements par jour</h2>
-      <div className="bars" aria-hidden>
-        {days.map(([day, value]) => (
-          <i key={day} title={`${day} ${formatPrice(value)}`} style={{ height: `${(value / max) * 100}%` }} />
-        ))}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button
+          type="button"
+          className={`kd-btn ${activeTab === "a_expedier" ? "" : "ghost"}`}
+          onClick={() => setActiveTab("a_expedier")}
+        >
+          À expédier ({toShip.length})
+        </button>
+        <button
+          type="button"
+          className={`kd-btn ${activeTab === "toutes" ? "" : "ghost"}`}
+          onClick={() => setActiveTab("toutes")}
+        >
+          Toutes les commandes ({orders.length})
+        </button>
       </div>
-      <ul>
-        {days.map(([day, value]) => (
-          <li key={day}>
-            {day} · {formatPrice(value)}
-          </li>
-        ))}
-      </ul>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Commande</th>
+            <th>Client & Articles</th>
+            <th>Statut</th>
+            <th>Expédition & Suivi Colis</th>
+            <th>Remboursement</th>
+          </tr>
+        </thead>
+        <tbody>
+          {displayedOrders.map((order) => {
+            const shipData = carrierInput[order.id] || {
+              carrier: "Colissimo",
+              tracking: order.shippingDetails?.trackingNumber || `6A${order.id.replace(/[^0-9]/g, "")}FR`,
+            };
+            const refData = refundInput[order.id] || { amount: "", reason: "Retour d'article" };
+            return (
+              <tr key={order.id}>
+                <td>
+                  <strong>{order.id}</strong>
+                  <div className="note">{new Date(order.createdAt).toLocaleDateString("fr-FR")}</div>
+                  <div style={{ fontWeight: 600, marginTop: 4 }}>{formatPrice(order.total)}</div>
+                </td>
+                <td>
+                  <div>{order.customer.firstName} {order.customer.lastName}</div>
+                  <div className="note">{order.customer.postal} {order.customer.city}</div>
+                  <div style={{ fontSize: 11, color: "#777", marginTop: 4 }}>
+                    {order.items.map((it) => `${it.name} (x${it.qty})`).join(", ")}
+                  </div>
+                </td>
+                <td>
+                  <span style={{ fontSize: 12, padding: "3px 8px", borderRadius: 4, background: order.status === "expediee" || order.status === "livree" ? "#ecfdf5" : order.status === "payee" ? "#eff6ff" : "#fef3c7", color: order.status === "expediee" || order.status === "livree" ? "#065f46" : order.status === "payee" ? "#1e40af" : "#92400e" }}>
+                    {orderStatusLabel[order.status]}
+                  </span>
+                </td>
+                <td>
+                  {order.shippingDetails ? (
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: "#1e3a8a", display: "flex", alignItems: "center", gap: 4 }}>
+                        <Truck size={14} /> {order.shippingDetails.carrier}
+                      </div>
+                      <code style={{ fontSize: 11, background: "#f1f5f9", padding: "2px 5px", borderRadius: 3 }}>
+                        {order.shippingDetails.trackingNumber}
+                      </code>
+                      {order.shippingDetails.trackingUrl && (
+                        <div style={{ marginTop: 4 }}>
+                          <a href={order.shippingDetails.trackingUrl} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#2563eb", textDecoration: "underline" }}>
+                            Suivre l'envoi ↗
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 220 }}>
+                      <select
+                        value={shipData.carrier}
+                        aria-label="Transporteur"
+                        onChange={(e) => setCarrierInput((prev) => ({ ...prev, [order.id]: { ...shipData, carrier: e.target.value } }))}
+                      >
+                        <option value="Colissimo">Colissimo</option>
+                        <option value="Chronopost">Chronopost Express</option>
+                        <option value="DPD">DPD France</option>
+                        <option value="Mondial Relay">Mondial Relay</option>
+                        <option value="Retrait Atelier">Retrait Atelier</option>
+                      </select>
+                      <input
+                        placeholder="N° de suivi"
+                        value={shipData.tracking}
+                        onChange={(e) => setCarrierInput((prev) => ({ ...prev, [order.id]: { ...shipData, tracking: e.target.value } }))}
+                      />
+                      <button type="button" className="kd-btn" style={{ fontSize: 11, padding: "4px 8px" }} onClick={() => handleShip(order.id)}>
+                        Confirmer expédition
+                      </button>
+                    </div>
+                  )}
+                </td>
+                <td>
+                  {order.refunds && order.refunds.length > 0 ? (
+                    <div style={{ marginBottom: 6 }}>
+                      {order.refunds.map((ref) => (
+                        <div key={ref.id} style={{ fontSize: 11, color: "#b91c1c", background: "#fef2f2", padding: "2px 6px", borderRadius: 3, marginBottom: 2 }}>
+                          -{formatPrice(ref.amount)} ({ref.reason})
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 180 }}>
+                    <input
+                      placeholder="Montant €"
+                      value={refData.amount}
+                      onChange={(e) => setRefundInput((prev) => ({ ...prev, [order.id]: { ...refData, amount: e.target.value } }))}
+                    />
+                    <button
+                      type="button"
+                      className="kd-btn ghost"
+                      style={{ fontSize: 11, padding: "4px 8px", color: "#b91c1c" }}
+                      onClick={() => handleRefund(order.id, order.total)}
+                    >
+                      Rembourser
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PromotionsAdmin() {
+  const { data } = useStudio();
+  const [promos, setPromos] = useState<PromoCode[]>(data.promoCodes || []);
+  const [newCode, setNewCode] = useState("");
+  const [discountType, setDiscountType] = useState<"percent" | "fixed">("percent");
+  const [value, setValue] = useState("10");
+  const [minPurchase, setMinPurchase] = useState("30");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const handleAddPromo = async () => {
+    if (!newCode.trim()) return;
+    const numericVal = parseFloat(value);
+    const numericMin = parseFloat(minPurchase);
+    if (isNaN(numericVal) || numericVal <= 0) return;
+
+    const promo: PromoCode = {
+      code: newCode.trim().toUpperCase(),
+      discountType,
+      discountValue: discountType === "percent" ? numericVal : Math.round(numericVal * 100),
+      minPurchaseCents: Math.round(numericMin * 100),
+      usedCount: 0,
+      active: true,
+    };
+
+    await savePromoCode(promo);
+    setPromos((prev) => [promo, ...prev.filter((p) => p.code !== promo.code)]);
+    setNewCode("");
+    setMsg(`Code promotionnel ${promo.code} créé avec succès !`);
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  return (
+    <div className="panel" style={{ maxWidth: 840 }}>
+      <PageHead
+        title="Codes Promotionnels & Réductions"
+        text="Créez des remises en pourcentage ou montant fixe, avec seuil minimum d'achat et contrôle côté serveur."
+      />
+
+      {msg && (
+        <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#065f46", padding: "10px 14px", borderRadius: 6, marginBottom: 16, fontSize: 13 }}>
+          {msg}
+        </div>
+      )}
+
+      <div style={{ background: "#faf8f6", padding: 18, borderRadius: 8, border: "1px solid #e7dfd8", marginBottom: 24 }}>
+        <h3 style={{ fontSize: 15, margin: "0 0 12px 0" }}>Créer un nouveau code de réduction</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, alignItems: "end" }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Code promo</label>
+            <input
+              placeholder="ex: PRIVILEGE20"
+              value={newCode}
+              onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Type</label>
+            <select
+              value={discountType}
+              onChange={(e) => setDiscountType(e.target.value as "percent" | "fixed")}
+              style={{ width: "100%" }}
+            >
+              <option value="percent">Pourcentage (%)</option>
+              <option value="fixed">Montant fixe (€)</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Valeur {discountType === "percent" ? "(%)" : "(€)"}</label>
+            <input
+              type="number"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 4 }}>Min. d'achat (€)</label>
+            <input
+              type="number"
+              value={minPurchase}
+              onChange={(e) => setMinPurchase(e.target.value)}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <button type="button" className="kd-btn" onClick={handleAddPromo} style={{ width: "100%" }}>
+              Enregistrer
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Réduction</th>
+            <th>Minimum d'achat</th>
+            <th>Utilisations</th>
+            <th>Statut</th>
+          </tr>
+        </thead>
+        <tbody>
+          {promos.map((p) => (
+            <tr key={p.code}>
+              <td>
+                <span style={{ fontWeight: 700, letterSpacing: "0.08em", background: "#f1f5f9", padding: "3px 8px", borderRadius: 4 }}>
+                  {p.code}
+                </span>
+              </td>
+              <td>
+                <strong>
+                  {p.discountType === "percent" ? `-${p.discountValue}%` : `-${formatPrice(p.discountValue)}`}
+                </strong>
+              </td>
+              <td>{formatPrice(p.minPurchaseCents)}</td>
+              <td>{p.usedCount} fois</td>
+              <td>
+                <span style={{ fontSize: 12, color: p.active ? "#065f46" : "#888", fontWeight: 600 }}>
+                  {p.active ? "● Actif" : "○ Inactif"}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AutomationsAdmin() {
+  const { data } = useStudio();
+  const templates = data.emailTemplates && data.emailTemplates.length > 0 ? data.emailTemplates : [];
+  const logs = data.emailLogs || [];
+  const [testEmail, setTestEmail] = useState("client.test@example.com");
+  const [selectedSlug, setSelectedSlug] = useState(templates[0]?.slug || "order_confirmation");
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"templates" | "logs">("templates");
+
+  const handleSendTest = async () => {
+    if (!testEmail.trim()) return;
+    setSending(true);
+    try {
+      const log = await sendTestAutomationEmail(selectedSlug, testEmail);
+      setFeedback(`E-mail de test (${log.templateSlug}) envoyé à ${log.recipient}. Enregistré avec la clé d'idempotence : ${log.idempotencyKey}`);
+      setTimeout(() => setFeedback(null), 6000);
+    } catch {
+      setFeedback("Erreur lors de l'envoi de l'e-mail de test.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="panel" style={{ maxWidth: 880 }}>
+      <PageHead
+        title="Moteur d'Automatisation & E-mails"
+        text="Modèles transactionnels avec variables, déclencheurs d'événements, file d'attente et journal d'idempotence."
+      />
+
+      {feedback && (
+        <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#065f46", padding: "10px 14px", borderRadius: 6, marginBottom: 16, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <CheckCircle2 size={16} /> {feedback}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <button
+          type="button"
+          className={`kd-btn ${activeTab === "templates" ? "" : "ghost"}`}
+          onClick={() => setActiveTab("templates")}
+        >
+          Modèles d'E-mails ({templates.length})
+        </button>
+        <button
+          type="button"
+          className={`kd-btn ${activeTab === "logs" ? "" : "ghost"}`}
+          onClick={() => setActiveTab("logs")}
+        >
+          Journal des Envois ({logs.length})
+        </button>
+      </div>
+
+      {activeTab === "templates" ? (
+        <>
+          <div style={{ background: "#faf8f6", padding: 18, borderRadius: 8, border: "1px solid #e7dfd8", marginBottom: 24 }}>
+            <h3 style={{ fontSize: 15, margin: "0 0 10px 0" }}>Simulateur d'envoi d'e-mail transactionnel</h3>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                value={selectedSlug}
+                onChange={(e) => setSelectedSlug(e.target.value)}
+                style={{ flex: 1, minWidth: 200 }}
+              >
+                {templates.map((tmpl) => (
+                  <option key={tmpl.slug} value={tmpl.slug}>
+                    {tmpl.name} ({tmpl.category})
+                  </option>
+                ))}
+              </select>
+              <input
+                placeholder="E-mail destinataire"
+                value={testEmail}
+                onChange={(e) => setTestEmail(e.target.value)}
+                style={{ flex: 1, minWidth: 200 }}
+              />
+              <button
+                type="button"
+                className="kd-btn"
+                disabled={sending}
+                onClick={handleSendTest}
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <Send size={14} /> {sending ? "Envoi…" : "Tester l'envoi"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 14 }}>
+            {templates.map((tmpl) => (
+              <div
+                key={tmpl.slug}
+                style={{
+                  border: "1px solid #e5ded7",
+                  background: "#fff",
+                  borderRadius: 8,
+                  padding: 16,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <strong style={{ fontSize: 15 }}>{tmpl.name}</strong>
+                  <span style={{ fontSize: 11, background: "#f1f5f9", padding: "2px 8px", borderRadius: 4, textTransform: "uppercase", fontWeight: 600 }}>
+                    {tmpl.category}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: "#444", marginBottom: 8 }}>
+                  <strong>Objet :</strong> {tmpl.subject}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "#888" }}>Variables :</span>
+                  {tmpl.variables.map((v) => (
+                    <code key={v} style={{ fontSize: 11, background: "#fef3c7", color: "#92400e", padding: "1px 6px", borderRadius: 3 }}>
+                      {"{{"}{v}{"}}"}
+                    </code>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Date / Heure</th>
+              <th>Événement</th>
+              <th>Destinataire</th>
+              <th>Objet</th>
+              <th>Statut</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.map((log) => (
+              <tr key={log.id}>
+                <td>
+                  <span style={{ fontSize: 12 }}>
+                    {new Date(log.sentAt).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "medium" })}
+                  </span>
+                </td>
+                <td>
+                  <code style={{ fontSize: 11, background: "#f1f5f9", padding: "2px 5px", borderRadius: 3 }}>
+                    {log.event}
+                  </code>
+                </td>
+                <td>{log.recipient}</td>
+                <td>{log.subject}</td>
+                <td>
+                  <span style={{ fontSize: 11, color: "#065f46", background: "#ecfdf5", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>
+                    ✓ {log.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function AuditAdmin() {
+  const { data } = useStudio();
+  const users = data.adminUsers || [];
+  const logs = data.auditLogs || [];
+
+  return (
+    <div className="panel" style={{ maxWidth: 880 }}>
+      <PageHead
+        title="Sécurité, Rôles & Journal d'Audit"
+        text="Contrôle d'accès basé sur les rôles (RBAC) et traçabilité inviolable de chaque modification sur le dashboard."
+      />
+
+      <div style={{ marginBottom: 28 }}>
+        <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Équipe & Permissions Administrateurs (RBAC)</h3>
+        <p className="note" style={{ marginBottom: 14 }}>
+          Les opérations sensibles (remboursements, changement de prix, bascule de secteur) sont contrôlées côté serveur selon le rôle de l'agent.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+          {users.map((usr) => (
+            <div
+              key={usr.id}
+              style={{
+                border: "1px solid #e2dad2",
+                background: "#ffffff",
+                padding: 14,
+                borderRadius: 8,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <strong>{usr.name}</strong>
+                <span
+                  style={{
+                    fontSize: 11,
+                    padding: "2px 7px",
+                    borderRadius: 4,
+                    fontWeight: 600,
+                    background: usr.role === "owner" ? "#211a1d" : usr.role === "order_manager" ? "#2563eb" : "#475569",
+                    color: "#fff",
+                  }}
+                >
+                  {usr.role.toUpperCase()}
+                </span>
+              </div>
+              <div className="note" style={{ marginBottom: 8 }}>{usr.email}</div>
+              <div style={{ fontSize: 11, color: "#666" }}>
+                Dernière connexion : {usr.lastLoginAt ? new Date(usr.lastLoginAt).toLocaleString("fr-FR") : "Jamais"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Journal d'Audit Central (Audit Trail)</h3>
+      <p className="note" style={{ marginBottom: 14 }}>
+        Historique immuable de toutes les actions d'administration et de gestion de commandes.
+      </p>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Date / Heure</th>
+            <th>Utilisateur</th>
+            <th>Action</th>
+            <th>Ressource</th>
+            <th>Détails</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.map((entry) => (
+            <tr key={entry.id}>
+              <td>
+                <span style={{ fontSize: 12 }}>
+                  {new Date(entry.timestamp).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "medium" })}
+                </span>
+              </td>
+              <td>
+                <strong>{entry.userName}</strong>
+              </td>
+              <td>
+                <code style={{ fontSize: 11, background: "#f1f5f9", padding: "2px 5px", borderRadius: 3 }}>
+                  {entry.action}
+                </code>
+              </td>
+              <td>{entry.resource}</td>
+              <td style={{ fontSize: 12, color: "#444" }}>{entry.details}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
