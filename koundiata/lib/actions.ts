@@ -1,11 +1,13 @@
 "use server";
 
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { isEmail, uid } from "@/lib/format";
-import { authorizePayment } from "@/lib/payment";
+import { createCardCheckout, getStripe, simulatedAuthorization, stripeEnabled } from "@/lib/payment";
 import { shippingCost } from "@/lib/catalog";
+import { restoreStock, takeStock } from "@/lib/stock";
 import { readStore, updateStore } from "@/lib/store";
-import type { CheckoutInput, OrderStatus, SiteContent } from "@/lib/types";
+import type { CheckoutInput, OrderItem, OrderStatus, SiteContent } from "@/lib/types";
 
 function touch() {
   revalidatePath("/", "layout");
@@ -55,25 +57,19 @@ export async function placeOrder(input: CheckoutInput) {
 
   try {
     const orderId = `KD-${Date.now().toString().slice(-6)}`;
-    const preview = await readStore();
-    const previewItems = input.items.map((line) => {
-      const product = preview.published.products.find((item) => item.id === line.productId);
-      if (!product) throw new Error("Produit introuvable.");
-      if (line.qty < 1 || line.qty > 8) throw new Error("Quantité invalide.");
-      if (product.stock < line.qty) throw new Error(`${product.name} n'est plus disponible dans cette quantité.`);
-      return product.price * line.qty;
-    });
-    const previewSubtotal = previewItems.reduce((sum, price) => sum + price, 0);
-    const previewShipping = shippingCost(preview.published, previewSubtotal);
-    const payment = await authorizePayment(previewSubtotal + previewShipping, orderId);
-    let createdTotal = 0;
+    const liveCard = stripeEnabled();
+    const headerList = await headers();
+    const proto = headerList.get("x-forwarded-proto") ?? "http";
+    const host = headerList.get("x-forwarded-host") ?? headerList.get("host") ?? "127.0.0.1:3847";
+    const origin = process.env.NEXT_PUBLIC_SITE_URL || `${proto}://${host}`;
+    let items: OrderItem[] = [];
+    let subtotal = 0;
+    let shipping = 0;
     await updateStore((data) => {
-      const catalog = data.published.products;
-      const items = input.items.map((line) => {
-        const product = catalog.find((item) => item.id === line.productId);
-        if (!product) throw new Error(`Produit introuvable.`);
+      items = input.items.map((line) => {
+        const product = data.published.products.find((item) => item.id === line.productId);
+        if (!product) throw new Error("Produit introuvable.");
         if (line.qty < 1 || line.qty > 8) throw new Error("Quantité invalide.");
-        if (product.stock < line.qty) throw new Error(`${product.name} n'est plus disponible dans cette quantité.`);
         return {
           productId: product.id,
           name: product.name,
@@ -82,21 +78,18 @@ export async function placeOrder(input: CheckoutInput) {
           image: product.images[0] ?? "",
         };
       });
-      for (const line of items) {
-        for (const version of [data.published, data.draft]) {
-          const product = version.products.find((item) => item.id === line.productId);
-          if (product) product.stock -= line.qty;
-        }
-      }
-      const subtotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
-      const shipping = shippingCost(data.published, subtotal);
-      createdTotal = subtotal + shipping;
+      subtotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+      shipping = shippingCost(data.published, subtotal);
+      takeStock(data, items);
       data.orders.unshift({
         id: orderId,
         createdAt: new Date().toISOString(),
-        status: "payee",
+        status: liveCard ? "en_attente" : "payee",
         demo: false,
-        payment,
+        stockHeld: true,
+        payment: liveCard
+          ? { provider: "stripe", status: "pending", reference: "" }
+          : { provider: "simulated", status: "authorized", reference: `sim_${orderId}` },
         customer: {
           firstName: input.firstName.trim(),
           lastName: input.lastName.trim(),
@@ -110,11 +103,32 @@ export async function placeOrder(input: CheckoutInput) {
         items,
         subtotal,
         shipping,
-        total: createdTotal,
+        total: subtotal + shipping,
       });
     });
-    touch();
-    return { ok: true as const, orderId };
+    if (!liveCard) {
+      await simulatedAuthorization(subtotal + shipping, orderId);
+      touch();
+      return { ok: true as const, orderId, redirectUrl: null as string | null };
+    }
+    try {
+      const checkout = await createCardCheckout({
+        orderId,
+        email: input.email.trim().toLowerCase(),
+        items,
+        shippingCents: shipping,
+        origin,
+      });
+      await updateStore((data) => {
+        const order = data.orders.find((item) => item.id === orderId);
+        if (order?.payment) order.payment.reference = checkout.reference;
+      });
+      touch();
+      return { ok: true as const, orderId, redirectUrl: checkout.url };
+    } catch (error) {
+      await releaseUnpaidOrder(orderId);
+      throw error;
+    }
   } catch (error) {
     return {
       ok: false as const,
@@ -126,16 +140,54 @@ export async function placeOrder(input: CheckoutInput) {
 export async function updateOrderStatus(id: string, status: OrderStatus) {
   await updateStore((data) => {
     const order = data.orders.find((item) => item.id === id);
-    if (order) order.status = status;
+    if (!order) return;
+    if ((status === "annulee" || status === "echouee") && order.stockHeld) restoreStock(data, order);
+    order.status = status;
   });
   touch();
 }
 
 export async function deleteOrder(id: string) {
   await updateStore((data) => {
-    data.orders = data.orders.filter((order) => order.id !== id);
+    const order = data.orders.find((item) => item.id === id);
+    if (order) restoreStock(data, order);
+    data.orders = data.orders.filter((item) => item.id !== id);
   });
   touch();
+}
+
+export async function releaseUnpaidOrder(id: string) {
+  await updateStore((data) => {
+    const order = data.orders.find((item) => item.id === id);
+    if (!order || order.status !== "en_attente") return;
+    restoreStock(data, order);
+    order.status = "annulee";
+    if (order.payment) order.payment.status = "failed";
+  });
+  touch();
+}
+
+export async function markOrderPaid(id: string, reference: string) {
+  await updateStore((data) => {
+    const order = data.orders.find((item) => item.id === id);
+    if (!order || order.status !== "en_attente") return;
+    order.status = "payee";
+    order.payment = { provider: "stripe", status: "authorized", reference };
+  });
+  touch();
+}
+
+export async function settleCheckoutReturn(orderId: string, sessionId?: string) {
+  if (sessionId && stripeEnabled()) {
+    const stripe = getStripe();
+    if (stripe) {
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.metadata?.orderId === orderId && session.payment_status === "paid") {
+        await markOrderPaid(orderId, session.id);
+      }
+    }
+  }
+  return getOrder(orderId);
 }
 
 export async function ordersForEmail(email: string) {

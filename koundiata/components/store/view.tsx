@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Headset,
   Heart,
@@ -23,7 +23,7 @@ import { formatPrice } from "@/lib/format";
 import { themeStyle } from "@/lib/theme";
 import type { HeroContent, PageContent, Product, PromoCard, Section, SiteContent, TrustIcon } from "@/lib/types";
 import { placeOrder, sendMessage, subscribeEmail, ordersForEmail } from "@/lib/actions";
-import { paymentMode } from "@/lib/payment";
+import { orderStatusLabel } from "@/lib/order-status";
 import { useCart } from "@/components/store/cart";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
@@ -841,7 +841,7 @@ export function CartView({ content }: { content: SiteContent }) {
   );
 }
 
-export function CheckoutView({ content }: { content: SiteContent }) {
+export function CheckoutView({ content, paymentsLive }: { content: SiteContent; paymentsLive: boolean }) {
   const cart = useCart();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
@@ -867,7 +867,11 @@ export function CheckoutView({ content }: { content: SiteContent }) {
   return (
     <div className="wrap">
       <h1 className="page-title">Commande</h1>
-      <p className="note">{paymentMode.notice}</p>
+      <p className="note">
+        {paymentsLive
+          ? "Vous serez redirigé vers Stripe pour payer par carte. La commande n'est confirmée qu'une fois le paiement accepté."
+          : "Paiement simulé : aucune carte n'est débitée. Ajoutez STRIPE_SECRET_KEY pour encaisser vraiment."}
+      </p>
       <form
         className="check-layout"
         onSubmit={async (event) => {
@@ -892,6 +896,10 @@ export function CheckoutView({ content }: { content: SiteContent }) {
             return;
           }
           localStorage.setItem("koundiata-email", String(form.get("email") ?? "").toLowerCase());
+          if (result.redirectUrl) {
+            window.location.href = result.redirectUrl;
+            return;
+          }
           cart.clear();
           window.location.href = `/commande/confirmation?id=${result.orderId}`;
         }}
@@ -934,7 +942,7 @@ export function CheckoutView({ content }: { content: SiteContent }) {
             <strong>{formatPrice(subtotal + shipping)}</strong>
           </div>
           <button className="kd-btn" type="submit" disabled={pending} style={{ width: "100%", marginTop: 12 }}>
-            {pending ? "Validation…" : "Valider la commande"}
+            {pending ? "Validation…" : paymentsLive ? "Payer par carte" : "Valider la commande"}
           </button>
         </aside>
       </form>
@@ -1105,7 +1113,7 @@ export function AccountView() {
         <article key={order.id} className="summary" style={{ marginTop: 12 }}>
           <strong>{order.id}</strong>
           <div className="note">
-            {new Date(order.createdAt).toLocaleDateString("fr-FR")} · {order.status} · {formatPrice(order.total)}
+            {new Date(order.createdAt).toLocaleDateString("fr-FR")} · {orderStatusLabel[order.status]} · {formatPrice(order.total)}
           </div>
           <ul>
             {order.items.map((item) => (
@@ -1150,16 +1158,28 @@ export function SearchView({ content, query }: { content: SiteContent; query: st
   );
 }
 
-export function ConfirmView({ id, total }: { id: string; total: string }) {
+export function ConfirmView({ id, total, paid, simulated }: { id: string; total: string; paid: boolean; simulated: boolean }) {
+  const cart = useCart();
+  const cleared = useRef(false);
+  useEffect(() => {
+    if (!paid || cleared.current) return;
+    cleared.current = true;
+    cart.clear();
+  }, [paid, cart]);
   return (
     <div className="wrap article">
-      <p className="eyebrow">Commande confirmée</p>
-      <h1 className="page-title">Merci.</h1>
+      <p className="eyebrow">{paid ? "Commande confirmée" : "Paiement incomplet"}</p>
+      <h1 className="page-title">{paid ? "Merci." : "Pas encore payée."}</h1>
       <p className="intro">
-        Votre commande <strong>{id}</strong> est enregistrée. Total {total}. Le paiement de cette démonstration n'a rien débité.
+        Commande <strong>{id}</strong>, total {total}.{" "}
+        {paid
+          ? simulated
+            ? "Le paiement est simulé : aucune carte n'a été débitée."
+            : "Le paiement par carte est accepté. Nous préparons la commande."
+          : "Le paiement n'est pas confirmé. Le stock réservé sera libéré si vous ne terminez pas le règlement."}
       </p>
-      <Link className="kd-btn" href="/compte">
-        Suivre la commande
+      <Link className="kd-btn" href={paid ? "/compte" : "/panier"}>
+        {paid ? "Suivre la commande" : "Retour au panier"}
       </Link>
     </div>
   );

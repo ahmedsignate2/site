@@ -192,7 +192,7 @@ export type SiteContent = {
   };
 };
 
-export type OrderStatus = "payee" | "preparation" | "expediee" | "livree" | "annulee";
+export type OrderStatus = "en_attente" | "payee" | "preparation" | "expediee" | "livree" | "annulee" | "echouee";
 
 export type OrderItem = {
   productId: string;
@@ -203,8 +203,8 @@ export type OrderItem = {
 };
 
 export type PaymentRecord = {
-  provider: "simulated";
-  status: "authorized";
+  provider: "simulated" | "stripe";
+  status: "pending" | "authorized" | "failed";
   reference: string;
 };
 
@@ -213,6 +213,7 @@ export type Order = {
   createdAt: string;
   status: OrderStatus;
   demo: boolean;
+  stockHeld?: boolean;
   payment?: PaymentRecord;
   customer: {
     firstName: string;

@@ -23,6 +23,7 @@ import {
 import { createSection } from "@/lib/catalog";
 import { formatPrice, slugify, uid } from "@/lib/format";
 import { deleteOrder, discardDraft, markMessageRead, publishSite, saveDraft, updateOrderStatus } from "@/lib/actions";
+import { countsAsSale, orderStatusLabel } from "@/lib/order-status";
 import type { HeroContent, OrderStatus, Product, Section, SiteContent, StoreData } from "@/lib/types";
 import { PreviewSite } from "@/components/store/view";
 import { Button } from "@/components/ui/button";
@@ -92,7 +93,7 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
     };
   }, [data, status]);
 
-  const pending = data.orders.filter((order) => order.status === "payee" || order.status === "preparation").length;
+  const pending = data.orders.filter((order) => order.status === "en_attente" || order.status === "payee" || order.status === "preparation").length;
   const unread = data.messages.filter((message) => !message.read).length;
 
   const links: { href: string; label: string; icon: LucideIcon; badge?: number; group?: string }[] = [
@@ -674,14 +675,7 @@ function CollectionsAdmin() {
   );
 }
 
-const statuses: OrderStatus[] = ["payee", "preparation", "expediee", "livree", "annulee"];
-const statusLabel: Record<OrderStatus, string> = {
-  payee: "Payée",
-  preparation: "Préparation",
-  expediee: "Expédiée",
-  livree: "Livrée",
-  annulee: "Annulée",
-};
+const statuses: OrderStatus[] = ["en_attente", "payee", "preparation", "expediee", "livree", "annulee", "echouee"];
 
 function OrdersAdmin() {
   const { data } = useStudio();
@@ -705,6 +699,7 @@ function OrdersAdmin() {
               <td>
                 {order.id}
                 {order.demo ? <div className="note">Exemple</div> : null}
+                {order.payment ? <div className="note">{order.payment.provider === "stripe" ? "Carte" : "Simulé"} · {order.payment.status === "authorized" ? "encaissé" : order.payment.status === "pending" ? "en cours" : "refusé"}</div> : null}
               </td>
               <td>
                 {order.customer.firstName} {order.customer.lastName}
@@ -723,7 +718,7 @@ function OrdersAdmin() {
                 >
                   {statuses.map((status) => (
                     <option key={status} value={status}>
-                      {statusLabel[status]}
+                      {orderStatusLabel[status]}
                     </option>
                   ))}
                 </select>
@@ -758,7 +753,7 @@ function ClientsAdmin() {
       total: 0,
     };
     current.orders += 1;
-    if (order.status !== "annulee") current.total += order.total;
+    if (countsAsSale(order.status)) current.total += order.total;
     clients.set(order.customer.email, current);
   }
   return (
@@ -985,7 +980,7 @@ function MessagesAdmin() {
 
 function AnalyticsAdmin() {
   const { data } = useStudio();
-  const live = data.orders.filter((order) => order.status !== "annulee");
+  const live = data.orders.filter((order) => countsAsSale(order.status));
   const revenue = live.reduce((sum, order) => sum + order.total, 0);
   const average = live.length ? Math.round(revenue / live.length) : 0;
   const counts = new Map<string, number>();
