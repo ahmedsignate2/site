@@ -202,11 +202,18 @@ export type OrderItem = {
   image: string;
 };
 
+export type PaymentRecord = {
+  provider: "simulated";
+  status: "authorized";
+  reference: string;
+};
+
 export type Order = {
   id: string;
   createdAt: string;
   status: OrderStatus;
   demo: boolean;
+  payment?: PaymentRecord;
   customer: {
     firstName: string;
     lastName: string;

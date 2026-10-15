@@ -23,6 +23,7 @@ import { formatPrice } from "@/lib/format";
 import { themeStyle } from "@/lib/theme";
 import type { HeroContent, PageContent, Product, PromoCard, Section, SiteContent, TrustIcon } from "@/lib/types";
 import { placeOrder, sendMessage, subscribeEmail, ordersForEmail } from "@/lib/actions";
+import { paymentMode } from "@/lib/payment";
 import { useCart } from "@/components/store/cart";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
@@ -866,7 +867,7 @@ export function CheckoutView({ content }: { content: SiteContent }) {
   return (
     <div className="wrap">
       <h1 className="page-title">Commande</h1>
-      <p className="note">Paiement simulé : aucune carte n'est débitée.</p>
+      <p className="note">{paymentMode.notice}</p>
       <form
         className="check-layout"
         onSubmit={async (event) => {

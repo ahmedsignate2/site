@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { isEmail, uid } from "@/lib/format";
+import { authorizePayment } from "@/lib/payment";
 import { shippingCost } from "@/lib/catalog";
 import { readStore, updateStore } from "@/lib/store";
 import type { CheckoutInput, OrderStatus, SiteContent } from "@/lib/types";
@@ -54,6 +55,17 @@ export async function placeOrder(input: CheckoutInput) {
 
   try {
     const orderId = `KD-${Date.now().toString().slice(-6)}`;
+    const preview = await readStore();
+    const previewItems = input.items.map((line) => {
+      const product = preview.published.products.find((item) => item.id === line.productId);
+      if (!product) throw new Error("Produit introuvable.");
+      if (line.qty < 1 || line.qty > 8) throw new Error("Quantité invalide.");
+      if (product.stock < line.qty) throw new Error(`${product.name} n'est plus disponible dans cette quantité.`);
+      return product.price * line.qty;
+    });
+    const previewSubtotal = previewItems.reduce((sum, price) => sum + price, 0);
+    const previewShipping = shippingCost(preview.published, previewSubtotal);
+    const payment = await authorizePayment(previewSubtotal + previewShipping, orderId);
     let createdTotal = 0;
     await updateStore((data) => {
       const catalog = data.published.products;
@@ -84,6 +96,7 @@ export async function placeOrder(input: CheckoutInput) {
         createdAt: new Date().toISOString(),
         status: "payee",
         demo: false,
+        payment,
         customer: {
           firstName: input.firstName.trim(),
           lastName: input.lastName.trim(),
