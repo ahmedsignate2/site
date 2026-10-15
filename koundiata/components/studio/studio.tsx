@@ -135,6 +135,9 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
             Publier
           </button>
         </header>
+        {navOpen ? (
+          <button className="nav-backdrop" type="button" aria-label="Fermer le menu" onClick={() => setNavOpen(false)} />
+        ) : null}
         <div className="studio-body">
           <nav className={`side${navOpen ? " open" : ""}`} aria-label="Studio">
             {links.map((link) => (
@@ -599,7 +602,7 @@ function ProductDialog({
   const [draft, setDraft] = useState(product);
   const set = (patch: Partial<Product>) => setDraft((current) => ({ ...current, ...patch }));
   return (
-    <div className="cookie" style={{ position: "fixed", inset: "8vh 8vw auto", maxWidth: 720, display: "block", zIndex: 40, overflow: "auto", maxHeight: "80vh" }} role="dialog" aria-modal="true" aria-label="Produit">
+    <div className="product-dialog" role="dialog" aria-modal="true" aria-label="Produit">
       <div style={{ display: "grid", gap: 10 }}>
         <Field label="Nom" value={draft.name} onChange={(value) => set({ name: value, slug: slugify(value) })} />
         <Field label="Accroche" value={draft.subtitle} onChange={(value) => set({ subtitle: value })} />

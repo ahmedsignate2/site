@@ -142,7 +142,15 @@ function Header({ content }: { content: SiteContent }) {
           <Link className="icon-btn" href="/compte" aria-label="Compte">
             <User size={18} />
           </Link>
-          <Link className="icon-btn" href="/panier" aria-label={`Panier, ${cart.count} article${cart.count > 1 ? "s" : ""}`}>
+          <Link
+            className="icon-btn"
+            href="/panier"
+            aria-label={`Panier, ${cart.count} article${cart.count > 1 ? "s" : ""}`}
+            onClick={(event) => {
+              event.preventDefault();
+              cart.openDrawer();
+            }}
+          >
             <ShoppingBag size={18} />
             {cart.count > 0 ? <span className="cart-count">{cart.count}</span> : null}
           </Link>
@@ -272,7 +280,68 @@ export function StoreShell({
       ) : null}
       <main id="contenu">{children}</main>
       {footer?.enabled !== false ? <Footer content={content} /> : null}
+      {preview ? null : <CartDrawer content={content} />}
       <CookieBar />
+    </div>
+  );
+}
+
+function CartDrawer({ content }: { content: SiteContent }) {
+  const cart = useCart();
+  if (!cart.drawerOpen) return null;
+  const lines = cart.lines
+    .map((line) => {
+      const product = content.products.find((item) => item.id === line.productId);
+      return product ? { ...line, product } : null;
+    })
+    .filter((line): line is { productId: string; qty: number; product: Product } => Boolean(line));
+  const subtotal = lines.reduce((sum, line) => sum + line.product.price * line.qty, 0);
+  return (
+    <div className="drawer-back" onClick={cart.closeDrawer}>
+      <aside className="drawer" role="dialog" aria-label="Panier" onClick={(event) => event.stopPropagation()}>
+        <div className="drawer-head">
+          <h2>Panier</h2>
+          <button type="button" className="icon-btn" aria-label="Fermer le panier" onClick={cart.closeDrawer}>
+            <X size={18} />
+          </button>
+        </div>
+        {lines.length === 0 ? <p>Votre panier est vide.</p> : null}
+        <div className="drawer-lines">
+          {lines.map((line) => (
+            <div className="line" key={line.productId}>
+              <div className="media square">
+                <Photo src={line.product.images[0] ?? ""} alt="" sizes="72px" />
+              </div>
+              <div>
+                <strong>{line.product.name}</strong>
+                <div className="note">{formatPrice(line.product.price)}</div>
+                <div className="qty">
+                  <button type="button" aria-label="Diminuer" onClick={() => cart.setQty(line.productId, line.qty - 1)}>
+                    −
+                  </button>
+                  <span>{line.qty}</span>
+                  <button type="button" aria-label="Augmenter" onClick={() => cart.setQty(line.productId, line.qty + 1)}>
+                    +
+                  </button>
+                </div>
+              </div>
+              <button type="button" className="quiet" onClick={() => cart.remove(line.productId)}>
+                Retirer
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="sum-row">
+          <span>Sous-total</span>
+          <strong>{formatPrice(subtotal)}</strong>
+        </div>
+        <Link className="kd-btn" href="/panier" onClick={cart.closeDrawer}>
+          Voir le panier
+        </Link>
+        <Link className="kd-btn ghost" href="/commande" onClick={cart.closeDrawer}>
+          Commander
+        </Link>
+      </aside>
     </div>
   );
 }
@@ -833,14 +902,14 @@ export function CheckoutView({ content }: { content: SiteContent }) {
               <div>{errors.form}</div>
             </div>
           ) : null}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="name-grid">
             <Field name="firstName" label="Prénom" error={errors.firstName} />
             <Field name="lastName" label="Nom" error={errors.lastName} />
           </div>
           <Field name="email" label="E-mail" type="email" error={errors.email} />
           <Field name="phone" label="Téléphone" error={errors.phone} />
           <Field name="address" label="Adresse" error={errors.address} />
-          <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12 }}>
+          <div className="name-grid">
             <Field name="postal" label="Code postal" error={errors.postal} />
             <Field name="city" label="Ville" error={errors.city} />
           </div>

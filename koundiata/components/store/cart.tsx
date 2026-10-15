@@ -8,6 +8,9 @@ type CartApi = {
   lines: CartLine[];
   ready: boolean;
   count: number;
+  drawerOpen: boolean;
+  openDrawer: () => void;
+  closeDrawer: () => void;
   add: (productId: string, qty?: number) => void;
   setQty: (productId: string, qty: number) => void;
   remove: (productId: string) => void;
@@ -22,6 +25,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [wish, setWish] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -50,7 +54,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
       lines,
       ready,
       count: lines.reduce((sum, line) => sum + line.qty, 0),
+      drawerOpen,
+      openDrawer: () => setDrawerOpen(true),
+      closeDrawer: () => setDrawerOpen(false),
       add: (productId, qty = 1) => {
+        setDrawerOpen(true);
         setLines((current) => {
           const found = current.find((line) => line.productId === productId);
           if (!found) return [...current, { productId, qty }];
@@ -72,7 +80,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       toggleWish: (productId) =>
         setWish((current) => (current.includes(productId) ? current.filter((id) => id !== productId) : [...current, productId])),
     }),
-    [lines, ready, wish],
+    [lines, ready, wish, drawerOpen],
   );
 
   return <CartContext.Provider value={api}>{children}</CartContext.Provider>;
