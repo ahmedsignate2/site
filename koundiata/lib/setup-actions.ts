@@ -4,6 +4,7 @@ import Stripe from "stripe";
 import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth";
 import { logAuditEvent } from "@/lib/audit";
+import { runAfterResponse } from "@/lib/automation";
 import { envNameFor, getConfig, invalidateConfig, SECRET_FIELDS } from "@/lib/config";
 import { isEmail } from "@/lib/format";
 import { sendEmail } from "@/lib/mailer";
@@ -89,10 +90,12 @@ export async function getSetupStatus() {
       id: "email",
       label: "E-mails automatiques (Resend)",
       ok: Boolean(config.resendApiKey && config.emailFrom),
-      detail:
-        config.resendApiKey && config.emailFrom
-          ? `Envoi depuis ${config.emailFrom}.`
-          : "Créez un compte sur resend.com, vérifiez votre domaine, puis collez la clé API et l'adresse d'expédition.",
+      warn: Boolean(config.resendApiKey && !config.emailFrom),
+      detail: !config.resendApiKey
+        ? "Créez un compte gratuit sur resend.com, puis collez la clé API (re_…). Sans clé, aucun e-mail ne part et la vérification des adresses est désactivée."
+        : config.emailFrom
+          ? `Envoi depuis ${config.emailFrom}. Le domaine doit être vérifié sur resend.com/domains, sinon seuls les e-mails vers votre propre adresse Resend partent.`
+          : "Clé présente mais pas d'expéditeur : l'adresse de test onboarding@resend.dev est utilisée et n'écrit qu'au titulaire du compte Resend. Vérifiez votre domaine puis renseignez l'expéditeur.",
     },
     {
       id: "uploads",
@@ -146,7 +149,7 @@ export async function saveIntegrations(patch: Partial<Record<keyof IntegrationSe
     }
   });
   invalidateConfig();
-  logAuditEvent("setup.update", "Installation", `Réglages modifiés : ${changed.join(", ") || "aucun"}`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("setup.update", "Installation", `Réglages modifiés : ${changed.join(", ") || "aucun"}`, user));
   revalidatePath("/", "layout");
   return getSetupStatus();
 }
@@ -172,7 +175,7 @@ export async function testEmail(to: string) {
     subject: `Test d'envoi - ${brand}`,
     html: `<p>Les e-mails automatiques de <strong>${brand}</strong> fonctionnent.</p>`,
   });
-  logAuditEvent("setup.test_email", "Installation", `E-mail de test vers ${to} : ${result.status}`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("setup.test_email", "Installation", `E-mail de test vers ${to} : ${result.status}`, user));
   if (result.status === "envoye") return { ok: true, message: `E-mail envoyé à ${to}.` };
   return { ok: false, message: result.error || "Échec de l'envoi." };
 }

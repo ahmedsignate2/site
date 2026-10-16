@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { hashPassword, passwordProblem, verifyPassword } from "@/lib/auth";
 import { clearCustomerCookie, currentCustomer, setCustomerCookie, toPublicCustomer } from "@/lib/customer-auth";
-import { dispatchAutomation } from "@/lib/automation";
+import { dispatchAutomation, queueAutomation } from "@/lib/automation";
 import { isEmail, uid } from "@/lib/format";
 import { siteOrigin } from "@/lib/origin";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -86,10 +86,7 @@ export async function registerCustomer(_state: FormState, form: FormData): Promi
   }
   if (!created) return { error: "Le compte n'a pas pu être créé.", fields };
   await setCustomerCookie(created);
-  dispatchAutomation("customer.welcome", fields.email, {
-    customer_name: fields.firstName,
-    account_url: `${await siteOrigin()}/compte`,
-  }).catch(() => {});
+  await sendVerificationEmail((created as Customer).id);
   redirect(safeNext(form.get("next")));
 }
 
@@ -116,6 +113,39 @@ export async function loginCustomer(_state: FormState, form: FormData): Promise<
 export async function logoutCustomer() {
   await clearCustomerCookie();
   redirect("/");
+}
+
+/* ---------- Vérification de l'adresse e-mail ---------- */
+
+const VERIFY_TTL_MS = 48 * 60 * 60_000;
+
+async function sendVerificationEmail(customerId: string) {
+  const token = randomBytes(32).toString("base64url");
+  let target: Customer | null = null;
+  await updateStore((data) => {
+    const customer = data.customers?.find((item) => item.id === customerId);
+    if (!customer || customer.emailVerified) return;
+    customer.tokens = (customer.tokens || []).filter((item) => item.kind !== "verify" && new Date(item.expiresAt) > new Date());
+    customer.tokens.push({ kind: "verify", hash: tokenHash(token), expiresAt: new Date(Date.now() + VERIFY_TTL_MS).toISOString() });
+    target = { ...customer };
+  });
+  if (!target) return;
+  const customer = target as Customer;
+  queueAutomation("customer.verify", customer.email, {
+    customer_name: customer.firstName,
+    verify_url: `${await siteOrigin()}/compte/verifier?email=${encodeURIComponent(customer.email)}&jeton=${token}`,
+  });
+}
+
+/** Renvoie le lien de confirmation (bouton « Renvoyer l'e-mail »). */
+export async function resendVerification() {
+  const me = await requireCustomer();
+  if (me.emailVerified) return { ok: true, message: "Votre adresse est déjà confirmée." };
+  if (!rateLimit(`verify-resend:${me.id}`, 3, 30 * 60_000).ok) {
+    return { ok: false, message: "Trois envois maximum par demi-heure. Pensez à regarder dans les courriers indésirables." };
+  }
+  await sendVerificationEmail(me.id);
+  return { ok: true, message: `Un nouveau lien vient d'être envoyé à ${me.email}.` };
 }
 
 /* ---------- Mot de passe oublié ---------- */

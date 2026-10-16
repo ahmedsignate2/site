@@ -15,6 +15,7 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { logAuditEvent } from "@/lib/audit";
+import { runAfterResponse } from "@/lib/automation";
 import { isEmail, uid } from "@/lib/format";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { readStore, updateStore } from "@/lib/store";
@@ -88,7 +89,7 @@ export async function login(_state: LoginState, form: FormData): Promise<LoginSt
     if (target) target.lastLoginAt = new Date().toISOString();
   });
   await setSessionCookie(user);
-  logAuditEvent("auth.login", "Studio", `Connexion de ${user.email}`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("auth.login", "Studio", `Connexion de ${user.email}`, user));
   // Première installation : on guide le propriétaire vers le branchement des services.
   redirect(hasAccounts ? safeNext(form.get("next")) : "/studio/installation");
 }
@@ -96,7 +97,7 @@ export async function login(_state: LoginState, form: FormData): Promise<LoginSt
 export async function logout() {
   const user = await currentUser();
   await clearSessionCookie();
-  if (user) logAuditEvent("auth.logout", "Studio", `Déconnexion de ${user.email}`, user).catch(() => {});
+  if (user) runAfterResponse(() => logAuditEvent("auth.logout", "Studio", `Déconnexion de ${user.email}`, user));
   redirect("/connexion");
 }
 
@@ -118,7 +119,7 @@ export async function createStaff(input: { name: string; email: string; role: Ad
     if (users.some((user) => user.email.toLowerCase() === email)) throw new Error("Un compte existe déjà avec cet e-mail.");
     users.push({ id: uid("usr"), name: input.name.trim(), email, role: input.role, active: true, passwordHash, sessionVersion: 0 });
   });
-  logAuditEvent("team.create", "Équipe", `Compte créé pour ${email} (${input.role})`, actor).catch(() => {});
+  runAfterResponse(() => logAuditEvent("team.create", "Équipe", `Compte créé pour ${email} (${input.role})`, actor));
   revalidatePath("/studio", "layout");
   return listStaff();
 }
@@ -145,7 +146,7 @@ export async function updateStaff(id: string, patch: { role?: AdminRole; active?
     }
     if (before.role !== user.role || before.active !== user.active) user.sessionVersion = (user.sessionVersion ?? 0) + 1;
   });
-  logAuditEvent("team.update", "Équipe", `Compte ${id} modifié (${JSON.stringify(patch)})`, actor).catch(() => {});
+  runAfterResponse(() => logAuditEvent("team.update", "Équipe", `Compte ${id} modifié (${JSON.stringify(patch)})`, actor));
   revalidatePath("/studio", "layout");
   return listStaff();
 }
@@ -162,7 +163,7 @@ export async function resetStaffPassword(id: string, password: string) {
     user.passwordHash = passwordHash;
     user.sessionVersion = (user.sessionVersion ?? 0) + 1;
   });
-  logAuditEvent("team.password_reset", "Équipe", `Mot de passe réinitialisé pour ${id}`, actor).catch(() => {});
+  runAfterResponse(() => logAuditEvent("team.password_reset", "Équipe", `Mot de passe réinitialisé pour ${id}`, actor));
   if (id === actor.id) await clearSessionCookie();
   return listStaff();
 }
@@ -182,7 +183,7 @@ export async function changeOwnPassword(current: string, next: string) {
     updated = { ...target };
   });
   if (updated) await setSessionCookie(updated);
-  logAuditEvent("auth.password_change", "Studio", "Mot de passe modifié", user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("auth.password_change", "Studio", "Mot de passe modifié", user));
 }
 
 async function listStaff() {

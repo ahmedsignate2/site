@@ -29,7 +29,7 @@ import { useCart } from "@/components/store/cart";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 function Photo({ src, alt, priority = false, sizes = "40vw" }: { src: string; alt: string; priority?: boolean; sizes?: string }) {
-  if (!src) return <div className="fill" style={{ background: "#efe6da" }} />;
+  if (!src) return <div className="fill" style={{ background: "var(--kd-soft)" }} />;
   if (src.startsWith("http")) {
     return <img src={src} alt={alt} className="fill" />;
   }
@@ -436,7 +436,7 @@ function Newsletter({ title, text, placeholder, button }: { title: string; text:
         </button>
       </form>
       {error ? (
-        <p id="news-err" className="err" role="alert" style={{ color: "#9f2d2d" }}>
+        <p id="news-err" className="err" role="alert" style={{ color: "var(--kd-danger)" }}>
           {error}
         </p>
       ) : null}
@@ -927,7 +927,7 @@ export function CheckoutView({
     <div className="wrap">
       <h1 className="page-title">Finalisation de commande</h1>
       <p className="note" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Lock size={15} style={{ color: "var(--kd-accent)" }} />
+        <Lock size={15} style={{ color: "var(--kd-accent-text)" }} />
         Paiement 100% sécurisé crypté SSL. Vos informations bancaires et coordonnées sont strictement confidentielles et protégées.
       </p>
       <form
@@ -1038,18 +1038,18 @@ export function CheckoutView({
                 Appliquer
               </button>
             </div>
-            {promoError && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 4 }}>{promoError}</div>}
+            {promoError && <div className="promo-err" style={{ fontSize: 12, marginTop: 4 }}>{promoError}</div>}
             {appliedPromo && (
-              <div style={{ fontSize: 12, color: "#065f46", marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="promo-ok" style={{ fontSize: 12, marginTop: 4, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span>Code <strong>{appliedPromo.code}</strong> appliqué !</span>
-                <button type="button" onClick={() => setAppliedPromo(null)} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", textDecoration: "underline", fontSize: 11 }}>
+                <button type="button" onClick={() => setAppliedPromo(null)} style={{ background: "none", border: "none", color: "var(--kd-muted)", cursor: "pointer", textDecoration: "underline", fontSize: 11 }}>
                   Retirer
                 </button>
               </div>
             )}
           </div>
           {appliedPromo && (
-            <div className="sum-row" style={{ color: "#065f46" }}>
+            <div className="sum-row discount">
               <span>Réduction ({appliedPromo.code})</span>
               <span>-{formatPrice(appliedPromo.discountCents)}</span>
             </div>

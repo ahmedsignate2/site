@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { getStripe, stripeEnabled } from "@/lib/payment";
 import { restoreStock } from "@/lib/stock";
 import { readStore, updateStore } from "@/lib/store";
-import { dispatchAutomation } from "@/lib/automation";
+import { queueAutomation, runAfterResponse } from "@/lib/automation";
 import { logAuditEvent } from "@/lib/audit";
 import { getConfig } from "@/lib/config";
 
@@ -46,21 +46,21 @@ export async function notifyOrderPaid(id: string) {
   const config = await getConfig();
   const total = `${(order.total / 100).toFixed(2).replace(".", ",")} €`;
   const shippingAddress = `${order.customer.address}, ${order.customer.postal} ${order.customer.city}, ${order.customer.country}`;
-  await dispatchAutomation("order.created", order.customer.email, {
+  queueAutomation("order.created", order.customer.email, {
     order_id: id,
     customer_name: `${order.customer.firstName} ${order.customer.lastName}`,
     total_amount: total,
     shipping_address: shippingAddress,
-  }).catch(() => {});
+  });
   if (config.adminNotifyEmail) {
     const origin = config.siteUrl || "";
-    await dispatchAutomation("admin.new_order", config.adminNotifyEmail, {
+    queueAutomation("admin.new_order", config.adminNotifyEmail, {
       order_id: id,
       customer_name: `${order.customer.firstName} ${order.customer.lastName}`,
       total_amount: total,
       shipping_address: shippingAddress,
       studio_order_url: `${origin}/studio/commandes`,
-    }).catch(() => {});
+    });
   }
 }
 
@@ -77,7 +77,7 @@ export async function markOrderPaid(id: string, reference: string) {
   });
   if (changed) {
     await notifyOrderPaid(id);
-    logAuditEvent("order.paid", "Commandes", `Paiement Stripe confirmé pour ${id} (${(total / 100).toFixed(2)} €)`).catch(() => {});
+    runAfterResponse(() => logAuditEvent("order.paid", "Commandes", `Paiement Stripe confirmé pour ${id} (${(total / 100).toFixed(2)} €)`));
   }
   touch();
 }

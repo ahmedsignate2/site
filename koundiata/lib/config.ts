@@ -85,3 +85,8 @@ export async function getConfig(): Promise<EffectiveConfig> {
   cached = { at: Date.now(), value };
   return value;
 }
+
+/** Les e-mails partent réellement : la vérification des adresses est alors exigée pour commander. */
+export async function mailEnabled() {
+  return Boolean((await getConfig()).resendApiKey);
+}

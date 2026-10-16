@@ -50,6 +50,7 @@ import { OwnPasswordForm, TeamPanel } from "@/components/studio/team";
 import { SetupAdmin } from "@/components/studio/setup";
 import { can, permissionForStudioPath, ROLE_LABELS } from "@/lib/permissions";
 import { SECTOR_PRESETS } from "@/lib/sectors";
+import { contrastReport } from "@/lib/theme";
 import { countsAsSale, orderStatusLabel } from "@/lib/order-status";
 import type {
   BusinessSector,
@@ -941,7 +942,7 @@ function ClientsAdmin() {
                       {client.email}
                       {client.phone ? ` · ${client.phone}` : ""}
                     </div>
-                    <div className="note">{client.addresses.length} adresse(s) · {client.wishlist.length} favori(s){subscribers.has(client.email) ? " · newsletter" : ""}</div>
+                    <div className="note">{client.emailVerified ? "E-mail confirmé" : "E-mail non confirmé"} · {client.addresses.length} adresse(s) · {client.wishlist.length} favori(s){subscribers.has(client.email) ? " · newsletter" : ""}</div>
                   </td>
                   <td>{new Date(client.createdAt).toLocaleDateString("fr-FR")}</td>
                   <td>{stat?.orders ?? 0}</td>
@@ -1048,16 +1049,24 @@ function ThemeAdmin() {
 
   const colors: [keyof typeof theme, string][] = [
     ["background", "Fond"],
+    ["card", "Fond des cartes et champs"],
     ["foreground", "Texte"],
+    ["muted", "Texte secondaire"],
     ["primary", "Boutons"],
     ["primaryForeground", "Texte des boutons"],
-    ["accent", "Étoiles"],
+    ["accent", "Accent (étoiles, liens, prix)"],
     ["announcement", "Bandeau"],
     ["announcementForeground", "Texte du bandeau"],
     ["border", "Filets"],
   ];
 
   const handleSelectSector = async (sectorId: BusinessSector) => {
+    if (
+      !window.confirm(
+        "Changer de secteur remplace le brouillon (produits, rayons, textes d'accueil et couleurs) par le modèle du secteur. Le site publié ne change pas tant que vous ne cliquez pas sur Publier. Continuer ?",
+      )
+    )
+      return;
     setSwitching(sectorId);
     await switchSectorPreset(sectorId);
     const config = SECTOR_PRESETS[sectorId];
@@ -1200,10 +1209,34 @@ function ThemeAdmin() {
           </span>
         </label>
       ))}
+      <ContrastPanel theme={theme} />
       <label className="field">
         <span>Arrondi des boutons ({theme.radius}px)</span>
         <input type="range" min={0} max={24} value={theme.radius} onChange={(event) => update((draft) => (draft.theme.radius = Number(event.target.value)))} />
       </label>
+    </div>
+  );
+}
+
+function ContrastPanel({ theme }: { theme: SiteContent["theme"] }) {
+  const report = contrastReport(theme);
+  const issues = report.filter((row) => !row.ok).length;
+  return (
+    <div style={{ border: "1px solid #e2dad2", borderRadius: 10, padding: 14, margin: "14px 0", background: "#fff" }}>
+      <strong>Lisibilité {issues ? `: ${issues} point(s) à améliorer` : ": parfaite"}</strong>
+      <p className="note" style={{ margin: "4px 0 10px" }}>
+        Norme d&apos;accessibilité WCAG : 4,5 minimum pour le texte. Si une couleur est trop pâle, la boutique la fonce (ou l&apos;éclaircit) automatiquement pour rester lisible.
+      </p>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 4 }}>
+        {report.map((row) => (
+          <li key={row.label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+            <span>{row.label}</span>
+            <span style={{ fontWeight: 600, color: row.ok ? "#047857" : "#b91c1c" }}>
+              {row.ratio.toFixed(1)} : 1 {row.ok ? "✓" : "· corrigé automatiquement"}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

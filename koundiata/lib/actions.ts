@@ -8,11 +8,12 @@ import { requirePermission } from "@/lib/auth";
 import { newCancelToken, newOrderId, notifyOrderPaid, releaseUnpaidOrder } from "@/lib/orders";
 import { currentCustomer } from "@/lib/customer-auth";
 import { siteOrigin } from "@/lib/origin";
+import { mailEnabled } from "@/lib/config";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { shippingCost } from "@/lib/catalog";
 import { restoreStock, takeStock } from "@/lib/stock";
 import { readStore, updateStore } from "@/lib/store";
-import { dispatchAutomation } from "@/lib/automation";
+import { dispatchAutomation, queueAutomation, runAfterResponse } from "@/lib/automation";
 import { logAuditEvent } from "@/lib/audit";
 import { SECTOR_PRESETS } from "@/lib/sectors";
 import type { BusinessSector, CheckoutInput, OrderItem, OrderStatus, PromoCode, SiteContent } from "@/lib/types";
@@ -60,7 +61,7 @@ export async function publishSite() {
   const data = await updateStore((store) => {
     store.published = structuredClone(store.draft);
   });
-  logAuditEvent("site.publish", "Site", "Publication du brouillon", user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("site.publish", "Site", "Publication du brouillon", user));
   touch();
   return data.published;
 }
@@ -96,6 +97,9 @@ export async function placeOrder(input: CheckoutInput) {
   const customer = await currentCustomer();
   if (!customer) {
     return { ok: false as const, needsLogin: true, errors: { form: "Connectez-vous ou créez un compte pour commander." } as Record<string, string> };
+  }
+  if (!customer.emailVerified && (await mailEnabled())) {
+    return { ok: false as const, errors: { form: "Confirmez votre adresse e-mail (lien reçu par e-mail) avant de commander." } as Record<string, string> };
   }
   const errors: Record<string, string> = {};
   if (!input.firstName.trim()) errors.firstName = "Indiquez votre prénom.";
@@ -203,7 +207,7 @@ export async function placeOrder(input: CheckoutInput) {
 
     if (!liveCard) {
       await notifyOrderPaid(orderId);
-      logAuditEvent("order.created", "Commandes", `Nouvelle commande simulée ${orderId} (${(total / 100).toFixed(2)} €)`).catch(() => {});
+      runAfterResponse(() => logAuditEvent("order.created", "Commandes", `Nouvelle commande simulée ${orderId} (${(total / 100).toFixed(2)} €)`));
       await simulatedAuthorization(total, orderId);
       touch();
       return { ok: true as const, orderId, redirectUrl: null as string | null };
@@ -256,16 +260,16 @@ export async function updateOrderStatus(id: string, status: OrderStatus) {
     brand = data.published.settings.brandName;
   });
   if (customerEmail && status === "expediee") {
-    dispatchAutomation("order.shipped", customerEmail, {
+    queueAutomation("order.shipped", customerEmail, {
       order_id: id,
       customer_name: customerName,
       carrier: "Colissimo",
       tracking_number: `6A${id.replace(/[^0-9]/g, "")}FR`,
       tracking_url: "https://www.laposte.fr",
       brand_name: brand,
-    }).catch(() => {});
+    });
   }
-  logAuditEvent("order.status", "Commandes", `Statut de la commande ${id} mis à jour : ${status}`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("order.status", "Commandes", `Statut de la commande ${id} mis à jour : ${status}`, user));
   touch();
 }
 
@@ -296,16 +300,16 @@ export async function updateOrderShipping(
     brand = data.published.settings.brandName;
   });
   if (customerEmail) {
-    dispatchAutomation("order.shipped", customerEmail, {
+    queueAutomation("order.shipped", customerEmail, {
       order_id: id,
       customer_name: customerName,
       carrier: carrier.trim(),
       tracking_number: trackingNumber.trim(),
       tracking_url: trackingUrl?.trim() || `https://www.laposte.fr/outils/suivre-vos-envois?code=${trackingNumber.trim()}`,
       brand_name: brand,
-    }).catch(() => {});
+    });
   }
-  logAuditEvent("order.shipping", "Expéditions", `Colis pour ${id} expédié via ${carrier} (${trackingNumber})`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("order.shipping", "Expéditions", `Colis pour ${id} expédié via ${carrier} (${trackingNumber})`, user));
   touch();
 }
 
@@ -353,15 +357,15 @@ export async function processOrderRefund(id: string, amountCents: number, reason
     brand = data.published.settings.brandName;
   });
   if (customerEmail) {
-    dispatchAutomation("order.refunded", customerEmail, {
+    queueAutomation("order.refunded", customerEmail, {
       order_id: id,
       customer_name: customerName,
       refund_amount: `${(amountCents / 100).toFixed(2)} €`,
       refund_reason: reason.trim(),
       brand_name: brand,
-    }).catch(() => {});
+    });
   }
-  logAuditEvent("order.refund", "Finances", `Remboursement de ${(amountCents / 100).toFixed(2)} € sur commande ${id} (Motif: ${reason})`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("order.refund", "Finances", `Remboursement de ${(amountCents / 100).toFixed(2)} € sur commande ${id} (Motif: ${reason})`, user));
   touch();
 }
 
@@ -427,7 +431,7 @@ export async function switchSectorPreset(sector: BusinessSector) {
       ];
     }
   });
-  logAuditEvent("sector.switch", "Theme Studio", `Bascule de l'univers de marque vers le secteur : ${config.name} (${config.brandName})`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("sector.switch", "Theme Studio", `Bascule de l'univers de marque vers le secteur : ${config.name} (${config.brandName})`, user));
   touch();
 }
 
@@ -459,7 +463,7 @@ const log = await dispatchAutomation(
     },
     templateSlug,
   );
-  logAuditEvent("automation.test_email", "Automatisations", `E-mail de test (${templateSlug}) envoyé à ${recipient}`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("automation.test_email", "Automatisations", `E-mail de test (${templateSlug}) envoyé à ${recipient}`, user));
   touch();
   return log;
 }
@@ -477,7 +481,7 @@ export async function savePromoCode(promo: PromoCode) {
       data.promoCodes.unshift(promo);
     }
   });
-  logAuditEvent("promo.save", "Promotions", `Code promo ${promo.code} enregistré (${promo.discountType === "percent" ? promo.discountValue + "%" : (promo.discountValue / 100).toFixed(2) + " €"})`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("promo.save", "Promotions", `Code promo ${promo.code} enregistré (${promo.discountType === "percent" ? promo.discountValue + "%" : (promo.discountValue / 100).toFixed(2) + " €"})`, user));
   touch();
 }
 
@@ -488,7 +492,7 @@ export async function deleteOrder(id: string) {
     if (order) restoreStock(data, order);
     data.orders = data.orders.filter((item) => item.id !== id);
   });
-  logAuditEvent("order.delete", "Commandes", `Commande ${id} supprimée`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("order.delete", "Commandes", `Commande ${id} supprimée`, user));
   touch();
 }
 
@@ -502,7 +506,7 @@ export async function clearAllOrders() {
     }
     data.orders = [];
   });
-  logAuditEvent("order.clear", "Commandes", "Toutes les commandes ont été effacées", user).catch(() => {});
+  runAfterResponse(() => logAuditEvent("order.clear", "Commandes", "Toutes les commandes ont été effacées", user));
   touch();
 }
 
@@ -594,6 +598,6 @@ export async function setCustomerBlocked(id: string, blocked: boolean) {
     customer.sessionVersion += 1;
     email = customer.email;
   });
-  logAuditEvent(blocked ? "customer.block" : "customer.unblock", "Clients", `Compte ${email} ${blocked ? "suspendu" : "réactivé"}`, user).catch(() => {});
+  runAfterResponse(() => logAuditEvent(blocked ? "customer.block" : "customer.unblock", "Clients", `Compte ${email} ${blocked ? "suspendu" : "réactivé"}`, user));
   touch();
 }

@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { uid } from "@/lib/format";
 import { sendEmail } from "@/lib/mailer";
 import { readStore, updateStore } from "@/lib/store";
@@ -91,6 +92,22 @@ export const DEFAULT_EMAIL_TEMPLATES: EmailTemplate[] = [
     variables: ["customer_name", "brand_name", "account_url", "support_email"],
   },
   {
+    slug: "customer_verify",
+    name: "Confirmation de l'adresse e-mail",
+    category: "compte",
+    subject: "Confirmez votre adresse e-mail - {{brand_name}}",
+    bodyHtml: `
+<div style="font-family: sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #111;">Bienvenue, {{customer_name}} !</h2>
+  <p>Merci d'avoir créé votre compte {{brand_name}}. Confirmez votre adresse e-mail pour pouvoir commander :</p>
+  <p><a href="{{verify_url}}" style="display: inline-block; background: #111; color: #fff; padding: 12px 20px; border-radius: 4px; text-decoration: none; font-weight: bold;">Confirmer mon adresse</a></p>
+  <p style="font-size: 13px; color: #666;">Ce lien est valable 48 heures. Si vous n'avez pas créé de compte, ignorez cet e-mail.</p>
+  <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
+  <p style="font-size: 12px; color: #888;">{{brand_name}} - {{support_email}}</p>
+</div>`,
+    variables: ["customer_name", "verify_url", "brand_name", "support_email"],
+  },
+  {
     slug: "customer_password_reset",
     name: "Mot de passe oublié",
     category: "compte",
@@ -141,6 +158,7 @@ const EVENT_TEMPLATES: Partial<Record<AutomationEventName, string>> = {
   "order.refunded": "order_refunded",
   "stock.low": "stock_alert_admin",
   "customer.welcome": "customer_welcome",
+  "customer.verify": "customer_verify",
   "customer.password_reset": "customer_password_reset",
   "admin.new_order": "admin_new_order",
 };
@@ -189,4 +207,23 @@ export async function dispatchAutomation(
   });
 
   return logEntry;
+}
+
+/**
+ * Lance une tâche après l'envoi de la réponse, sans la perdre.
+ * Sur Vercel / Cloudflare, une promesse « oubliée » est coupée dès que la page est renvoyée :
+ * after() garde la fonction en vie jusqu'à la fin de la tâche.
+ */
+export function runAfterResponse(task: () => Promise<unknown>) {
+  const safe = () => task().catch((error) => console.error("Tâche en arrière-plan :", error));
+  try {
+    after(safe);
+  } catch {
+    void safe();
+  }
+}
+
+/** Envoie un e-mail automatique après la réponse (inscription, expédition, remboursement…). */
+export function queueAutomation(event: AutomationEventName, recipient: string, variables: Record<string, string>, templateSlug?: string) {
+  runAfterResponse(() => dispatchAutomation(event, recipient, variables, templateSlug));
 }

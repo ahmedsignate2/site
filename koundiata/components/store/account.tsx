@@ -11,6 +11,7 @@ import {
   logoutCustomer,
   registerCustomer,
   requestPasswordReset,
+  resendVerification,
   resetPassword,
   saveAddress,
   setDefaultAddress,
@@ -167,6 +168,39 @@ export function ResetPasswordForm({ email, token }: { email: string; token: stri
   );
 }
 
+/* ---------- Vérification de l'adresse ---------- */
+
+export function VerifyNotice({ email, blocking = false }: { email: string; blocking?: boolean }) {
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="verify-notice" role="status">
+      <strong>{blocking ? "Confirmez votre adresse e-mail pour commander" : "Adresse e-mail à confirmer"}</strong>
+      <p>
+        Nous avons envoyé un lien de confirmation à <b>{email}</b>. Pensez à regarder dans les courriers indésirables.
+      </p>
+      <button
+        type="button"
+        className="kd-btn ghost"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            setMessage((await resendVerification()).message);
+          } catch (error) {
+            setMessage(errorText(error));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Envoi…" : "Renvoyer le lien"}
+      </button>
+      {message ? <p className="note">{message}</p> : null}
+    </div>
+  );
+}
+
 /* ---------- Tableau de bord client ---------- */
 
 type Tab = "apercu" | "commandes" | "adresses" | "favoris" | "profil" | "donnees";
@@ -187,11 +221,13 @@ export function AccountDashboard({
   orders,
   products,
   initialTab,
+  verificationRequired = false,
 }: {
   customer: PublicCustomer;
   orders: ClientOrder[];
   products: Product[];
   initialTab?: string;
+  verificationRequired?: boolean;
 }) {
   const [customer, setCustomer] = useState(initialCustomer);
   const [tab, setTab] = useState<Tab>(TABS.some((item) => item.id === initialTab) ? (initialTab as Tab) : "apercu");
@@ -212,6 +248,7 @@ export function AccountDashboard({
           </button>
         </form>
       </div>
+      {verificationRequired && !customer.emailVerified ? <VerifyNotice email={customer.email} /> : null}
       <div className="account-layout">
         <nav className="account-nav" aria-label="Espace client">
           {TABS.map((item) => (
