@@ -576,3 +576,12 @@
 @media (prefers-reduced-motion: reduce) {
   .store *, .studio * { transition: none !important; animation: none !important; }
 }
+
+/* Connexion au studio */
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: #f6f2ed; }
+.login-card { width: 100%; max-width: 400px; background: #fff; border: 1px solid #e2dad2; border-radius: 12px; padding: 28px 24px; }
+.login-card h1 { font-size: 1.5rem; margin: 4px 0 14px; }
+.login-card .note { margin-bottom: 14px; }
+.login-form { display: flex; flex-direction: column; gap: 14px; }
+.login-form .err { color: #e11d48; font-size: 13px; margin: 0; }
+.studio-user { display: flex; align-items: center; gap: 8px; font-size: 13px; }

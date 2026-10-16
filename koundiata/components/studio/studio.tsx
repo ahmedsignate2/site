@@ -44,6 +44,9 @@ import {
   sendTestAutomationEmail,
   savePromoCode,
 } from "@/lib/actions";
+import { logout } from "@/lib/team-actions";
+import { OwnPasswordForm, TeamPanel } from "@/components/studio/team";
+import { can, permissionForStudioPath, ROLE_LABELS } from "@/lib/permissions";
 import { SECTOR_PRESETS } from "@/lib/sectors";
 import { countsAsSale, orderStatusLabel } from "@/lib/order-status";
 import type {
@@ -55,6 +58,7 @@ import type {
   Section,
   SiteContent,
   StoreData,
+  PublicAdminUser,
 } from "@/lib/types";
 import { PreviewSite } from "@/components/store/view";
 import { Button } from "@/components/ui/button";
@@ -66,6 +70,7 @@ type Api = {
   publish: () => Promise<void>;
   discard: () => Promise<void>;
   dirty: boolean;
+  me: PublicAdminUser;
 };
 
 const StudioContext = createContext<Api | null>(null);
@@ -76,7 +81,7 @@ function useStudio() {
   return value;
 }
 
-export function StudioShell({ initial, children }: { initial: StoreData; children: ReactNode }) {
+export function StudioShell({ initial, me, children }: { initial: StoreData; me: PublicAdminUser; children: ReactNode }) {
   const [data, setData] = useState(initial);
   const [status, setStatus] = useState("Brouillon");
   const [navOpen, setNavOpen] = useState(false);
@@ -100,6 +105,7 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
       data,
       status,
       dirty,
+      me,
       update: (recipe) => {
         dirtyRef.current = true;
         setData((current) => {
@@ -110,10 +116,14 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
       },
       publish: async () => {
         setStatus("Publication…");
-        await saveDraft(data.draft);
-        const published = await publishSite();
-        setData((current) => ({ ...current, published }));
-        setStatus("Publié");
+        try {
+          await saveDraft(data.draft);
+          const published = await publishSite();
+          setData((current) => ({ ...current, published }));
+          setStatus("Publié");
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : "Échec de la publication");
+        }
       },
       discard: async () => {
         const draft = await discardDraft();
@@ -122,7 +132,7 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
         setStatus("Brouillon abandonné");
       },
     };
-  }, [data, status]);
+  }, [data, status, me]);
 
   const pending = data.orders.filter((order) => order.status === "en_attente" || order.status === "payee" || order.status === "preparation").length;
   const unread = data.messages.filter((message) => !message.read).length;
@@ -147,6 +157,16 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
     { href: "/studio/audit", label: "Contrôle d'Accès (IAM)", icon: ShieldCheck },
     { href: "/studio/parametres", label: "Paramètres Généraux", icon: Settings },
   ];
+  const canEdit = can(me.role, "content");
+  const allowedLinks = links
+    .map((link, index) => {
+      // Conserver l'intitulé du groupe sur le premier lien visible du groupe.
+      let group = link.group;
+      if (!group) for (let i = index; i >= 0 && !group; i -= 1) group = links[i].group;
+      return { ...link, group };
+    })
+    .filter((link) => can(me.role, permissionForStudioPath(link.href)))
+    .map((link, index, list) => ({ ...link, group: index === 0 || list[index - 1].group !== link.group ? link.group : undefined }));
 
   return (
     <StudioContext.Provider value={api}>
@@ -162,24 +182,36 @@ export function StudioShell({ initial, children }: { initial: StoreData; childre
           <span className="draft-pill">{api.dirty ? "Brouillon non publié" : "Publié"}</span>
           <span className="note">{status}</span>
           <div className="spacer" />
-          {api.dirty ? (
+          {canEdit && api.dirty ? (
             <Button variant="outline" onClick={() => api.discard()}>
               Abandonner
             </Button>
           ) : null}
-          <a className="kd-btn ghost" href="/api/preview?to=/">
-            Aperçu
-          </a>
-          <button className="kd-btn" type="button" onClick={() => api.publish()}>
-            Publier
-          </button>
+          {canEdit ? (
+            <>
+              <a className="kd-btn ghost" href="/api/preview?to=/">
+                Aperçu
+              </a>
+              <button className="kd-btn" type="button" onClick={() => api.publish()}>
+                Publier
+              </button>
+            </>
+          ) : null}
+          <span className="studio-user" title={me.email}>
+            {me.name} · {ROLE_LABELS[me.role]}
+          </span>
+          <form action={logout}>
+            <button className="kd-btn ghost" type="submit">
+              Déconnexion
+            </button>
+          </form>
         </header>
         {navOpen ? (
           <button className="nav-backdrop" type="button" aria-label="Fermer le menu" onClick={() => setNavOpen(false)} />
         ) : null}
         <div className="studio-body">
           <nav className={`side${navOpen ? " open" : ""}`} aria-label="Studio">
-            {links.map((link) => (
+            {allowedLinks.map((link) => (
               <div key={link.href}>
                 {link.group ? <div className="group">{link.group}</div> : null}
                 <Link
@@ -1835,7 +1867,7 @@ function AutomationsAdmin() {
 }
 
 function AuditAdmin() {
-  const { data } = useStudio();
+  const { data, me } = useStudio();
   const users = data.adminUsers || [];
   const logs = data.auditLogs || [];
 
@@ -1843,52 +1875,17 @@ function AuditAdmin() {
     <div className="panel" style={{ maxWidth: 880 }}>
       <PageHead
         title="Sécurité, Rôles & Journal d'Audit"
-        text="Contrôle d'accès basé sur les rôles (RBAC) et traçabilité inviolable de chaque modification sur le dashboard."
+        text="Comptes du studio, rôles et journal des actions d'administration."
       />
 
-      <div style={{ marginBottom: 28 }}>
-        <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Équipe & Permissions Administrateurs (RBAC)</h3>
-        <p className="note" style={{ marginBottom: 14 }}>
-          Les opérations sensibles (remboursements, changement de prix, bascule de secteur) sont contrôlées côté serveur selon le rôle de l'agent.
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
-          {users.map((usr) => (
-            <div
-              key={usr.id}
-              style={{
-                border: "1px solid #e2dad2",
-                background: "#ffffff",
-                padding: 14,
-                borderRadius: 8,
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <strong>{usr.name}</strong>
-                <span
-                  style={{
-                    fontSize: 11,
-                    padding: "2px 7px",
-                    borderRadius: 4,
-                    fontWeight: 600,
-                    background: usr.role === "owner" ? "#211a1d" : usr.role === "order_manager" ? "#2563eb" : "#475569",
-                    color: "#fff",
-                  }}
-                >
-                  {usr.role.toUpperCase()}
-                </span>
-              </div>
-              <div className="note" style={{ marginBottom: 8 }}>{usr.email}</div>
-              <div style={{ fontSize: 11, color: "#666" }}>
-                Dernière connexion : {usr.lastLoginAt ? new Date(usr.lastLoginAt).toLocaleString("fr-FR") : "Jamais"}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <TeamPanel initial={users} me={me} />
+
+      <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Mon mot de passe</h3>
+      <OwnPasswordForm />
 
       <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Journal d'Audit Central (Audit Trail)</h3>
       <p className="note" style={{ marginBottom: 14 }}>
-        Historique immuable de toutes les actions d'administration et de gestion de commandes.
+        Historique des actions d'administration (500 dernières entrées).
       </p>
 
       <table className="table">

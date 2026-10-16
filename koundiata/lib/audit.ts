@@ -1,46 +1,23 @@
 import { uid } from "@/lib/format";
 import { updateStore } from "@/lib/store";
-import type { AdminRole, AdminUser, AuditLogEntry } from "@/lib/types";
+import type { AdminUser, AuditLogEntry } from "@/lib/types";
 
-export const DEFAULT_ADMIN_USERS: AdminUser[] = [
-  {
-    id: "usr_owner",
-    name: "Ahmed (Fondateur)",
-    email: "ahmed@boutique.pro",
-    role: "owner",
-    active: true,
-    lastLoginAt: new Date().toISOString(),
-  },
-  {
-    id: "usr_logistics",
-    name: "Karim (Gestionnaire Commandes & Stocks)",
-    email: "karim.expedition@boutique.pro",
-    role: "order_manager",
-    active: true,
-    lastLoginAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: "usr_support",
-    name: "Claire (Support & Relation Client)",
-    email: "support@boutique.pro",
-    role: "support",
-    active: true,
-    lastLoginAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-  },
-];
+/** Aucun compte par défaut : le premier propriétaire est créé à partir de ADMIN_EMAIL / ADMIN_PASSWORD. */
+export const DEFAULT_ADMIN_USERS: AdminUser[] = [];
 
-export async function logAuditEvent(
-  action: string,
-  resource: string,
-  details: string,
-  userId: string = "usr_owner",
-  userName: string = "Ahmed",
-) {
+/** Identifiants des faux comptes livrés dans les anciennes données de démonstration. */
+export const LEGACY_DEMO_USER_IDS = ["usr_owner", "usr_logistics", "usr_support"];
+
+export type AuditActor = Pick<AdminUser, "id" | "name">;
+
+const SYSTEM_ACTOR: AuditActor = { id: "system", name: "Système" };
+
+export async function logAuditEvent(action: string, resource: string, details: string, actor: AuditActor = SYSTEM_ACTOR) {
   const entry: AuditLogEntry = {
     id: uid("audit"),
     timestamp: new Date().toISOString(),
-    userId,
-    userName,
+    userId: actor.id,
+    userName: actor.name,
     action,
     resource,
     details,
@@ -49,20 +26,8 @@ export async function logAuditEvent(
   await updateStore((data) => {
     if (!data.auditLogs) data.auditLogs = [];
     data.auditLogs.unshift(entry);
-    // Conserver les 150 dernières entrées pour l'auditabilité
-    if (data.auditLogs.length > 150) data.auditLogs.pop();
+    if (data.auditLogs.length > 500) data.auditLogs.length = 500;
   });
 
   return entry;
-}
-
-export function canPerformAction(
-  role: AdminRole,
-  action: "orders" | "products" | "theme" | "settings" | "iam" | "refunds",
-): boolean {
-  if (role === "owner" || role === "admin") return true;
-  if (role === "order_manager") return action === "orders" || action === "refunds";
-  if (role === "catalog_manager") return action === "products";
-  if (role === "support") return action === "orders";
-  return false;
 }

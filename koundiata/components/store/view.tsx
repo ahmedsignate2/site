@@ -23,7 +23,7 @@ import { formatPrice } from "@/lib/format";
 import { themeStyle } from "@/lib/theme";
 import type { BusinessSector, HeroContent, PageContent, Product, PromoCard, Section, SiteContent, TrustIcon } from "@/lib/types";
 import { ThreeHeroCanvas } from "@/components/store/three-hero";
-import { placeOrder, sendMessage, subscribeEmail, ordersForEmail, validatePromoCode } from "@/lib/actions";
+import { placeOrder, sendMessage, subscribeEmail, lookupOrder, validatePromoCode } from "@/lib/actions";
 import { orderStatusLabel } from "@/lib/order-status";
 import { useCart } from "@/components/store/cart";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -1147,36 +1147,49 @@ export function ContactView({ content }: { content: SiteContent }) {
   );
 }
 
+type FoundOrder = Extract<Awaited<ReturnType<typeof lookupOrder>>, { ok: true }>["order"];
+
 export function AccountView() {
   const [email, setEmail] = useState("");
-  const [orders, setOrders] = useState<Awaited<ReturnType<typeof ordersForEmail>> | null>(null);
+  const [orderId, setOrderId] = useState("");
+  const [order, setOrder] = useState<FoundOrder | null>(null);
+  const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   return (
     <div className="wrap article">
-      <h1 className="page-title">Votre compte</h1>
-      <p className="intro">Retrouvez vos commandes avec l'e-mail utilisé au paiement. Pas de mot de passe : cette page ne crée pas de compte.</p>
+      <h1 className="page-title">Suivre ma commande</h1>
+      <p className="intro">Indiquez le numéro reçu après votre achat et l'e-mail utilisé pour la commande.</p>
       <form
         className="inline-form"
-        style={{ justifyContent: "flex-start" }}
+        style={{ justifyContent: "flex-start", flexWrap: "wrap" }}
         onSubmit={async (event) => {
           event.preventDefault();
           setPending(true);
-          const list = await ordersForEmail(email);
-          setOrders(list);
+          setError("");
+          const result = await lookupOrder(email, orderId);
           setPending(false);
+          if (result.ok) setOrder(result.order);
+          else {
+            setOrder(null);
+            setError(result.error);
+          }
         }}
       >
+        <label className="field">
+          <span>Numéro de commande</span>
+          <input required value={orderId} placeholder="KD-…" onChange={(event) => setOrderId(event.target.value)} />
+        </label>
         <label className="field">
           <span>E-mail</span>
           <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
         </label>
         <button className="kd-btn" type="submit" disabled={pending} style={{ alignSelf: "flex-end" }}>
-          {pending ? "Recherche…" : "Voir mes commandes"}
+          {pending ? "Recherche…" : "Voir ma commande"}
         </button>
       </form>
-      {orders && orders.length === 0 ? <p>Aucune commande pour cette adresse.</p> : null}
-      {orders?.map((order) => (
-        <article key={order.id} className="summary" style={{ marginTop: 12 }}>
+      {error ? <p role="alert">{error}</p> : null}
+      {order ? (
+        <article className="summary" style={{ marginTop: 12 }}>
           <strong>{order.id}</strong>
           <div className="note">
             {new Date(order.createdAt).toLocaleDateString("fr-FR")} · {orderStatusLabel[order.status]} · {formatPrice(order.total)}
@@ -1188,8 +1201,17 @@ export function AccountView() {
               </li>
             ))}
           </ul>
+          {order.tracking ? (
+            <p className="note">
+              Suivi {order.tracking.carrier} : {order.tracking.url ? (
+                <a href={order.tracking.url} target="_blank" rel="noreferrer">{order.tracking.number}</a>
+              ) : (
+                order.tracking.number
+              )}
+            </p>
+          ) : null}
         </article>
-      ))}
+      ) : null}
     </div>
   );
 }

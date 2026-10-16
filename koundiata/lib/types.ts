@@ -291,6 +291,8 @@ export type Order = {
   status: OrderStatus;
   demo: boolean;
   stockHeld?: boolean;
+  /** Jeton aléatoire qui autorise l'annulation du paiement depuis le retour Stripe. */
+  cancelToken?: string;
   payment?: PaymentRecord;
   customer: {
     firstName: string;
@@ -366,7 +368,14 @@ export type AdminUser = {
   role: AdminRole;
   active: boolean;
   lastLoginAt?: string;
+  /** Hachage scrypt du mot de passe ("scrypt$sel$hash"). Jamais envoyé au navigateur. */
+  passwordHash?: string;
+  /** Incrémenté à chaque changement de mot de passe ou de rôle : invalide les sessions ouvertes. */
+  sessionVersion?: number;
 };
+
+/** Utilisateur du studio tel qu'il est exposé au navigateur (sans secret). */
+export type PublicAdminUser = Omit<AdminUser, "passwordHash" | "sessionVersion">;
 
 export type AuditLogEntry = {
   id: string;

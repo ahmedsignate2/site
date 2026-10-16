@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { markOrderPaid, releaseUnpaidOrder } from "@/lib/actions";
+import { markOrderPaid, releaseUnpaidOrder } from "@/lib/orders";
 import { getStripe } from "@/lib/payment";
 
 export const runtime = "nodejs";

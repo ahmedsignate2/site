@@ -33,6 +33,7 @@ export async function createCardCheckout(input: {
   items: OrderItem[];
   shippingCents: number;
   origin: string;
+  cancelToken: string;
 }) {
   const stripe = getStripe();
   if (!stripe) throw new Error("Stripe n'est pas configuré.");
@@ -63,7 +64,7 @@ export async function createCardCheckout(input: {
     payment_intent_data: { metadata: { orderId: input.orderId } },
     line_items: lineItems,
     success_url: `${input.origin}/commande/confirmation?id=${encodeURIComponent(input.orderId)}&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${input.origin}/commande?annulee=1&commande=${encodeURIComponent(input.orderId)}`,
+    cancel_url: `${input.origin}/commande?annulee=1&commande=${encodeURIComponent(input.orderId)}&jeton=${encodeURIComponent(input.cancelToken)}`,
   });
   if (!session.url) throw new Error("Stripe n'a pas renvoyé de page de paiement.");
   return { url: session.url, reference: session.id };

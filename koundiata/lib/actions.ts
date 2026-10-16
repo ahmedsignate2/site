@@ -4,6 +4,9 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { isEmail, uid } from "@/lib/format";
 import { createCardCheckout, getStripe, simulatedAuthorization, stripeEnabled } from "@/lib/payment";
+import { requirePermission } from "@/lib/auth";
+import { newCancelToken, newOrderId, releaseUnpaidOrder } from "@/lib/orders";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { shippingCost } from "@/lib/catalog";
 import { restoreStock, takeStock } from "@/lib/stock";
 import { readStore, updateStore } from "@/lib/store";
@@ -12,15 +15,38 @@ import { logAuditEvent } from "@/lib/audit";
 import { SECTOR_PRESETS } from "@/lib/sectors";
 import type { BusinessSector, CheckoutInput, OrderItem, OrderStatus, PromoCode, SiteContent } from "@/lib/types";
 
+/*
+ * Chaque fonction exportée ici est un point d'accès public (Server Action).
+ * Les actions du studio commencent donc toutes par requirePermission(...).
+ * Les opérations internes (paiement confirmé, libération de stock) vivent dans lib/orders.ts.
+ */
+
 function touch() {
   revalidatePath("/", "layout");
 }
 
-export async function loadStudioData() {
-  return readStore();
+async function throttle(scope: string, limit: number, windowMs: number) {
+  const ip = clientIp(await headers());
+  return rateLimit(`${scope}:${ip}`, limit, windowMs).ok;
 }
 
+const ORDER_STATUSES: OrderStatus[] = [
+  "en_attente",
+  "payee",
+  "preparation",
+  "expediee",
+  "livree",
+  "annulee",
+  "echouee",
+  "remboursee_partiel",
+  "remboursee_total",
+];
+
 export async function saveDraft(draft: SiteContent) {
+  await requirePermission("content");
+  if (!draft || typeof draft !== "object" || !Array.isArray(draft.products) || !draft.settings) {
+    throw new Error("Brouillon invalide.");
+  }
   await updateStore((data) => {
     data.draft = draft;
   });
@@ -28,14 +54,17 @@ export async function saveDraft(draft: SiteContent) {
 }
 
 export async function publishSite() {
+  const user = await requirePermission("content");
   const data = await updateStore((store) => {
     store.published = structuredClone(store.draft);
   });
+  logAuditEvent("site.publish", "Site", "Publication du brouillon", user).catch(() => {});
   touch();
   return data.published;
 }
 
 export async function discardDraft() {
+  await requirePermission("content");
   const data = await updateStore((store) => {
     store.draft = structuredClone(store.published);
   });
@@ -44,6 +73,9 @@ export async function discardDraft() {
 }
 
 export async function placeOrder(input: CheckoutInput) {
+  if (!(await throttle("order", 20, 10 * 60_000))) {
+    return { ok: false as const, errors: { form: "Trop de tentatives. Réessayez dans quelques minutes." } as Record<string, string> };
+  }
   const errors: Record<string, string> = {};
   if (!input.firstName.trim()) errors.firstName = "Indiquez votre prénom.";
   if (!input.lastName.trim()) errors.lastName = "Indiquez votre nom.";
@@ -59,7 +91,8 @@ export async function placeOrder(input: CheckoutInput) {
   }
 
   try {
-    const orderId = `KD-${Date.now().toString().slice(-6)}`;
+    const orderId = newOrderId();
+    const cancelToken = newCancelToken();
     const liveCard = stripeEnabled();
     const headerList = await headers();
     const proto = headerList.get("x-forwarded-proto") ?? "http";
@@ -68,13 +101,16 @@ export async function placeOrder(input: CheckoutInput) {
     let items: OrderItem[] = [];
     let subtotal = 0;
     let shipping = 0;
+    let brandName = "";
+    let supportEmail = "";
     await updateStore((data) => {
+      brandName = data.published.settings.brandName;
+      supportEmail = data.published.settings.supportEmail;
       items = input.items.map((line) => {
-        const product =
-          data.published.products.find((item) => item.id === line.productId) ||
-          data.draft.products.find((item) => item.id === line.productId);
+        // Seuls les produits publiés sont vendables : le brouillon n'est pas encore en ligne.
+        const product = data.published.products.find((item) => item.id === line.productId);
         if (!product) throw new Error("Produit introuvable.");
-        if (line.qty < 1 || line.qty > 8) throw new Error("Quantité invalide.");
+        if (!Number.isInteger(line.qty) || line.qty < 1 || line.qty > 8) throw new Error("Quantité invalide.");
         return {
           productId: product.id,
           name: product.name,
@@ -92,6 +128,7 @@ export async function placeOrder(input: CheckoutInput) {
         status: liveCard ? "en_attente" : "payee",
         demo: false,
         stockHeld: true,
+        cancelToken,
         payment: liveCard
           ? { provider: "stripe", status: "pending", reference: "" }
           : { provider: "simulated", status: "authorized", reference: `sim_${orderId}` },
@@ -118,8 +155,8 @@ export async function placeOrder(input: CheckoutInput) {
         customer_name: `${input.firstName} ${input.lastName}`,
         total_amount: `${((subtotal + shipping) / 100).toFixed(2)} €`,
         shipping_address: `${input.address}, ${input.postal} ${input.city}`,
-        brand_name: "KOUNDIATA",
-        support_email: "bonjour@koundiata.fr",
+        brand_name: brandName,
+        support_email: supportEmail,
       }).catch(() => {});
       logAuditEvent("order.created", "Commandes", `Nouvelle commande simulée ${orderId} (${((subtotal + shipping) / 100).toFixed(2)} €)`).catch(() => {});
       await simulatedAuthorization(subtotal + shipping, orderId);
@@ -133,6 +170,7 @@ export async function placeOrder(input: CheckoutInput) {
         items,
         shippingCents: shipping,
         origin,
+        cancelToken,
       });
       await updateStore((data) => {
         const order = data.orders.find((item) => item.id === orderId);
@@ -153,6 +191,11 @@ export async function placeOrder(input: CheckoutInput) {
 }
 
 export async function updateOrderStatus(id: string, status: OrderStatus) {
+  const user = await requirePermission("orders");
+  if (!ORDER_STATUSES.includes(status)) throw new Error("Statut inconnu.");
+  if (status === "remboursee_partiel" || status === "remboursee_total") {
+    throw new Error("Utilisez le bouton Rembourser pour enregistrer un remboursement.");
+  }
   let customerEmail = "";
   let customerName = "";
   let brand = "Boutique";
@@ -175,7 +218,7 @@ export async function updateOrderStatus(id: string, status: OrderStatus) {
       brand_name: brand,
     }).catch(() => {});
   }
-  logAuditEvent("order.status", "Commandes", `Statut de la commande ${id} mis à jour : ${status}`).catch(() => {});
+  logAuditEvent("order.status", "Commandes", `Statut de la commande ${id} mis à jour : ${status}`, user).catch(() => {});
   touch();
 }
 
@@ -185,6 +228,9 @@ export async function updateOrderShipping(
   trackingNumber: string,
   trackingUrl?: string,
 ) {
+  const user = await requirePermission("orders");
+  if (!carrier.trim() || !trackingNumber.trim()) throw new Error("Indiquez le transporteur et le numéro de suivi.");
+  if (trackingUrl?.trim() && !/^https?:\/\//i.test(trackingUrl.trim())) throw new Error("Le lien de suivi doit commencer par https://");
   let customerEmail = "";
   let customerName = "";
   let brand = "Boutique";
@@ -212,11 +258,33 @@ export async function updateOrderShipping(
       brand_name: brand,
     }).catch(() => {});
   }
-  logAuditEvent("order.shipping", "Expéditions", `Colis pour ${id} expédié via ${carrier} (${trackingNumber})`).catch(() => {});
+  logAuditEvent("order.shipping", "Expéditions", `Colis pour ${id} expédié via ${carrier} (${trackingNumber})`, user).catch(() => {});
   touch();
 }
 
 export async function processOrderRefund(id: string, amountCents: number, reason: string) {
+  const user = await requirePermission("refunds");
+  if (!Number.isInteger(amountCents) || amountCents <= 0) throw new Error("Montant de remboursement invalide.");
+  const current = (await readStore()).orders.find((item) => item.id === id);
+  if (!current) throw new Error("Commande introuvable.");
+  const alreadyRefunded = (current.refunds || []).reduce((sum, r) => sum + r.amount, 0);
+  if (alreadyRefunded + amountCents > current.total) throw new Error("Le remboursement dépasse le montant payé.");
+
+  // Paiement réel : le remboursement passe par Stripe avant d'être enregistré.
+  let refundReference = `re_sim_${Date.now()}`;
+  if (current.payment?.provider === "stripe") {
+    const stripe = getStripe();
+    if (!stripe) throw new Error("Stripe n'est pas configuré : remboursement impossible.");
+    const session = await stripe.checkout.sessions.retrieve(current.payment.reference);
+    const paymentIntent = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+    if (!paymentIntent) throw new Error("Paiement Stripe introuvable pour cette commande.");
+    const refund = await stripe.refunds.create(
+      { payment_intent: paymentIntent, amount: amountCents, metadata: { orderId: id } },
+      { idempotencyKey: `refund_${id}_${alreadyRefunded}_${amountCents}` },
+    );
+    refundReference = refund.id;
+  }
+
   let customerEmail = "";
   let customerName = "";
   let brand = "Boutique";
@@ -229,7 +297,7 @@ export async function processOrderRefund(id: string, amountCents: number, reason
       amount: amountCents,
       reason: reason.trim(),
       date: new Date().toISOString(),
-      stripeRefundId: `re_sim_${Date.now()}`,
+      stripeRefundId: refundReference,
     });
     const totalRefunded = order.refunds.reduce((sum, r) => sum + r.amount, 0);
     order.status = totalRefunded >= order.total ? "remboursee_total" : "remboursee_partiel";
@@ -246,11 +314,12 @@ export async function processOrderRefund(id: string, amountCents: number, reason
       brand_name: brand,
     }).catch(() => {});
   }
-  logAuditEvent("order.refund", "Finances", `Remboursement de ${(amountCents / 100).toFixed(2)} € sur commande ${id} (Motif: ${reason})`).catch(() => {});
+  logAuditEvent("order.refund", "Finances", `Remboursement de ${(amountCents / 100).toFixed(2)} € sur commande ${id} (Motif: ${reason})`, user).catch(() => {});
   touch();
 }
 
 export async function validatePromoCode(code: string, subtotalCents: number) {
+  if (!(await throttle("promo", 30, 10 * 60_000))) return { valid: false as const, error: "Trop de tentatives. Réessayez plus tard." };
   const data = await readStore();
   const clean = code.trim().toUpperCase();
   const promo = (data.promoCodes || []).find((p) => p.code.toUpperCase() === clean && p.active);
@@ -269,6 +338,7 @@ export async function validatePromoCode(code: string, subtotalCents: number) {
 }
 
 export async function switchSectorPreset(sector: BusinessSector) {
+  const user = await requirePermission("content");
   const config = SECTOR_PRESETS[sector];
   if (!config) return;
   await updateStore((data) => {
@@ -319,11 +389,13 @@ export async function switchSectorPreset(sector: BusinessSector) {
       ];
     }
   });
-  logAuditEvent("sector.switch", "Theme Studio", `Bascule de l'univers de marque vers le secteur : ${config.name} (${config.brandName})`).catch(() => {});
+  logAuditEvent("sector.switch", "Theme Studio", `Bascule de l'univers de marque vers le secteur : ${config.name} (${config.brandName})`, user).catch(() => {});
   touch();
 }
 
 export async function sendTestAutomationEmail(templateSlug: string, recipient: string) {
+  const user = await requirePermission("automations");
+  if (!isEmail(recipient)) throw new Error("Adresse e-mail invalide.");
   const log = await dispatchAutomation(
     "order.created",
     recipient,
@@ -348,12 +420,15 @@ export async function sendTestAutomationEmail(templateSlug: string, recipient: s
     },
     templateSlug,
   );
-  logAuditEvent("automation.test_email", "Automatisations", `E-mail de test (${templateSlug}) envoyé à ${recipient}`).catch(() => {});
+  logAuditEvent("automation.test_email", "Automatisations", `E-mail de test (${templateSlug}) envoyé à ${recipient}`, user).catch(() => {});
   touch();
   return log;
 }
 
 export async function savePromoCode(promo: PromoCode) {
+  const user = await requirePermission("promos");
+  if (!promo.code?.trim() || !Number.isFinite(promo.discountValue) || promo.discountValue < 0) throw new Error("Code promo invalide.");
+  if (promo.discountType === "percent" && promo.discountValue > 100) throw new Error("Une remise ne peut pas dépasser 100 %.");
   await updateStore((data) => {
     if (!data.promoCodes) data.promoCodes = [];
     const idx = data.promoCodes.findIndex((p) => p.code.toUpperCase() === promo.code.toUpperCase());
@@ -363,31 +438,23 @@ export async function savePromoCode(promo: PromoCode) {
       data.promoCodes.unshift(promo);
     }
   });
-  logAuditEvent("promo.save", "Promotions", `Code promo ${promo.code} enregistré (${promo.discountType === "percent" ? promo.discountValue + "%" : (promo.discountValue / 100).toFixed(2) + " €"})`).catch(() => {});
+  logAuditEvent("promo.save", "Promotions", `Code promo ${promo.code} enregistré (${promo.discountType === "percent" ? promo.discountValue + "%" : (promo.discountValue / 100).toFixed(2) + " €"})`, user).catch(() => {});
   touch();
 }
 
 export async function deleteOrder(id: string) {
+  const user = await requirePermission("danger");
   await updateStore((data) => {
     const order = data.orders.find((item) => item.id === id);
     if (order) restoreStock(data, order);
     data.orders = data.orders.filter((item) => item.id !== id);
   });
-  touch();
-}
-
-export async function releaseUnpaidOrder(id: string) {
-  await updateStore((data) => {
-    const order = data.orders.find((item) => item.id === id);
-    if (!order || order.status !== "en_attente") return;
-    restoreStock(data, order);
-    // Remove unpaid abandoned checkout so it never creates phantom orders in dashboard
-    data.orders = data.orders.filter((item) => item.id !== id);
-  });
+  logAuditEvent("order.delete", "Commandes", `Commande ${id} supprimée`, user).catch(() => {});
   touch();
 }
 
 export async function clearAllOrders() {
+  const user = await requirePermission("danger");
   await updateStore((data) => {
     for (const order of data.orders) {
       if (order.stockHeld) {
@@ -396,69 +463,41 @@ export async function clearAllOrders() {
     }
     data.orders = [];
   });
-  logAuditEvent("order.clear", "Commandes", "Toutes les commandes de test ont été effacées").catch(() => {});
+  logAuditEvent("order.clear", "Commandes", "Toutes les commandes ont été effacées", user).catch(() => {});
   touch();
 }
 
-export async function markOrderPaid(id: string, reference: string) {
-  let customerEmail = "";
-  let customerName = "";
-  let brand = "Boutique";
-  let totalFormatted = "";
-  let shippingAddress = "";
-
-  await updateStore((data) => {
-    const order = data.orders.find((item) => item.id === id);
-    if (!order || order.status !== "en_attente") return;
-    order.status = "payee";
-    order.payment = { provider: "stripe", status: "authorized", reference };
-    customerEmail = order.customer.email;
-    customerName = `${order.customer.firstName} ${order.customer.lastName}`;
-    brand = data.published.settings.brandName;
-    totalFormatted = `${((order.total) / 100).toFixed(2)} €`;
-    shippingAddress = `${order.customer.address}, ${order.customer.postal} ${order.customer.city}`;
-  });
-
-  if (customerEmail) {
-    dispatchAutomation("order.created", customerEmail, {
-      order_id: id,
-      customer_name: customerName,
-      total_amount: totalFormatted,
-      shipping_address: shippingAddress,
-      brand_name: brand,
-      support_email: "bonjour@koundiata.fr",
-    }).catch(() => {});
-    logAuditEvent("order.paid", "Commandes", `Paiement Stripe confirmé pour ${id} (${totalFormatted})`).catch(() => {});
+/**
+ * Suivi de commande côté client : il faut le numéro ET l'e-mail de la commande.
+ * Ne renvoie ni adresse ni téléphone.
+ */
+export async function lookupOrder(email: string, orderId: string) {
+  if (!(await throttle("lookup", 10, 10 * 60_000))) {
+    return { ok: false as const, error: "Trop de recherches. Réessayez dans quelques minutes." };
   }
-  touch();
-}
-
-export async function settleCheckoutReturn(orderId: string, sessionId?: string) {
-  if (sessionId && stripeEnabled()) {
-    const stripe = getStripe();
-    if (stripe) {
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-      if (session.metadata?.orderId === orderId && session.payment_status === "paid") {
-        await markOrderPaid(orderId, session.id);
-      }
-    }
-  }
-  return getOrder(orderId);
-}
-
-export async function ordersForEmail(email: string) {
-  if (!isEmail(email)) return [];
+  if (!isEmail(email) || !orderId.trim()) return { ok: false as const, error: "Indiquez votre e-mail et votre numéro de commande." };
   const data = await readStore();
   const needle = email.trim().toLowerCase();
-  return data.orders.filter((order) => order.customer.email === needle);
-}
-
-export async function getOrder(id: string) {
-  const data = await readStore();
-  return data.orders.find((order) => order.id === id) ?? null;
+  const id = orderId.trim().toUpperCase();
+  const order = data.orders.find((item) => item.id.toUpperCase() === id && item.customer.email === needle);
+  if (!order) return { ok: false as const, error: "Aucune commande ne correspond à ces informations." };
+  return {
+    ok: true as const,
+    order: {
+      id: order.id,
+      createdAt: order.createdAt,
+      status: order.status,
+      total: order.total,
+      items: order.items.map((item) => ({ productId: item.productId, name: item.name, qty: item.qty })),
+      tracking: order.shippingDetails
+        ? { carrier: order.shippingDetails.carrier, number: order.shippingDetails.trackingNumber, url: order.shippingDetails.trackingUrl }
+        : null,
+    },
+  };
 }
 
 export async function subscribeEmail(email: string) {
+  if (!(await throttle("subscribe", 10, 10 * 60_000))) return { ok: false as const, error: "Trop de tentatives. Réessayez plus tard." };
   if (!isEmail(email)) return { ok: false as const, error: "Indiquez une adresse e-mail valide." };
   const clean = email.trim().toLowerCase();
   await updateStore((data) => {
@@ -471,7 +510,11 @@ export async function subscribeEmail(email: string) {
 }
 
 export async function sendMessage(input: { name: string; email: string; subject: string; body: string }) {
+  if (!(await throttle("message", 5, 10 * 60_000))) {
+    return { ok: false as const, errors: { form: "Trop de messages envoyés. Réessayez plus tard." } as Record<string, string> };
+  }
   const errors: Record<string, string> = {};
+  if (input.body.trim().length > 5000) errors.body = "Message trop long (5 000 caractères maximum).";
   if (input.name.trim().length < 2) errors.name = "Indiquez votre nom.";
   if (!isEmail(input.email)) errors.email = "Indiquez une adresse e-mail valide.";
   if (!input.subject.trim()) errors.subject = "Choisissez un sujet.";
@@ -493,6 +536,7 @@ export async function sendMessage(input: { name: string; email: string; subject:
 }
 
 export async function markMessageRead(id: string) {
+  await requirePermission("messages");
   await updateStore((data) => {
     const message = data.messages.find((item) => item.id === id);
     if (message) message.read = true;

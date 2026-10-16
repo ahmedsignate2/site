@@ -3,7 +3,7 @@ import path from "path";
 import { createSeed } from "@/lib/seed";
 import type { StoreData } from "@/lib/types";
 import { DEFAULT_EMAIL_TEMPLATES } from "@/lib/automation";
-import { DEFAULT_ADMIN_USERS } from "@/lib/audit";
+import { DEFAULT_ADMIN_USERS, LEGACY_DEMO_USER_IDS } from "@/lib/audit";
 
 const file = path.join(process.cwd(), "data", "store.json");
 
@@ -53,8 +53,8 @@ async function ensure(): Promise<StoreData> {
       {
         id: "aud-seed-1",
         timestamp: "2026-10-14T09:15:00.000Z",
-        userId: "usr_owner",
-        userName: "Ahmed",
+        userId: "system",
+        userName: "Système",
         action: "theme.update",
         resource: "Theme Studio",
         details: "Ajustement de la palette et mise à jour des marges",
@@ -64,6 +64,12 @@ async function ensure(): Promise<StoreData> {
   }
   if (!data.adminUsers) {
     data.adminUsers = DEFAULT_ADMIN_USERS;
+    mutated = true;
+  }
+  // Les anciens comptes de démonstration n'ont pas de mot de passe et ne correspondent à personne.
+  const realUsers = data.adminUsers.filter((user) => user.passwordHash || !LEGACY_DEMO_USER_IDS.includes(user.id));
+  if (realUsers.length !== data.adminUsers.length) {
+    data.adminUsers = realUsers;
     mutated = true;
   }
   if (!data.draft.settings.sector) {

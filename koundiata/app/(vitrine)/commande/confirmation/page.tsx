@@ -1,4 +1,4 @@
-import { settleCheckoutReturn } from "@/lib/actions";
+import { settleCheckoutReturn } from "@/lib/orders";
 import { formatPrice } from "@/lib/format";
 import { ConfirmView } from "@/components/store/view";
 
