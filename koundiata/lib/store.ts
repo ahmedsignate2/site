@@ -15,8 +15,21 @@ import { DEFAULT_ADMIN_USERS, LEGACY_DEMO_USER_IDS } from "@/lib/audit";
 
 const file = path.join(process.cwd(), "data", "store.json");
 
+/** Neon, Supabase et Vercel exposent l'adresse sous l'un de ces noms. */
+function databaseUrl() {
+  return process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || "";
+}
+
 export function storageBackend() {
-  return process.env.DATABASE_URL ? "postgres" : "file";
+  return databaseUrl() ? "postgres" : "file";
+}
+
+const READ_ONLY_HELP =
+  "Ce serveur n'autorise pas l'écriture de fichiers (Vercel, Cloudflare, Netlify…). Ajoutez une base Postgres (variable DATABASE_URL, ex. Neon) puis redéployez.";
+
+function isReadOnly(error: unknown) {
+  const code = (error as { code?: string })?.code;
+  return code === "EROFS" || code === "EACCES" || code === "EPERM";
 }
 
 /** Met les anciennes données au format actuel. Renvoie true si quelque chose a changé. */
@@ -117,21 +130,34 @@ async function readFileStore(): Promise<StoreData | null> {
 }
 
 async function writeFileStore(data: StoreData) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temp, JSON.stringify(data));
-  await fs.rename(temp, file);
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.tmp`;
+    await fs.writeFile(temp, JSON.stringify(data));
+    await fs.rename(temp, file);
+  } catch (error) {
+    if (isReadOnly(error)) throw new Error(READ_ONLY_HELP);
+    throw error;
+  }
 }
 
+// Sur un disque en lecture seule, la lecture doit continuer de fonctionner (vitrine visible).
+let memoryCopy: StoreData | null = null;
+
 async function fileEnsure(): Promise<StoreData> {
+  if (memoryCopy) return memoryCopy;
   let data = await readFileStore();
-  if (!data) {
-    data = createSeed();
-    migrate(data);
-    await writeFileStore(data);
-    return data;
+  const fresh = !data;
+  if (!data) data = createSeed();
+  if (migrate(data) || fresh) {
+    try {
+      await writeFileStore(data);
+    } catch (error) {
+      if (!(error instanceof Error && error.message === READ_ONLY_HELP)) throw error;
+      console.error(READ_ONLY_HELP);
+      memoryCopy = data;
+    }
   }
-  if (migrate(data)) await writeFileStore(data);
   return data;
 }
 
@@ -151,7 +177,7 @@ const globalForSql = globalThis as unknown as { kdSql?: Sql; kdSqlReady?: Promis
 
 function sql() {
   if (!globalForSql.kdSql) {
-    globalForSql.kdSql = postgres(process.env.DATABASE_URL as string, {
+    globalForSql.kdSql = postgres(databaseUrl(), {
       max: Number(process.env.DATABASE_POOL_SIZE || 5),
       prepare: false, // compatible avec les poolers (PgBouncer, Supabase, Neon)
       idle_timeout: 20,

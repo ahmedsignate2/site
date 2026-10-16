@@ -81,6 +81,7 @@ export async function registerCustomer(_state: FormState, form: FormData): Promi
     if (error instanceof Error && error.message === "exists") {
       return { error: "Un compte existe déjà avec cet e-mail. Connectez-vous ou réinitialisez votre mot de passe.", fields };
     }
+    if (error instanceof Error && error.message.startsWith("Ce serveur")) return { error: error.message, fields };
     throw error;
   }
   if (!created) return { error: "Le compte n'a pas pu être créé.", fields };
