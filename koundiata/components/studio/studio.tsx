@@ -43,9 +43,11 @@ import {
   switchSectorPreset,
   sendTestAutomationEmail,
   savePromoCode,
+  setCustomerBlocked,
 } from "@/lib/actions";
 import { logout } from "@/lib/team-actions";
 import { OwnPasswordForm, TeamPanel } from "@/components/studio/team";
+import { SetupAdmin } from "@/components/studio/setup";
 import { can, permissionForStudioPath, ROLE_LABELS } from "@/lib/permissions";
 import { SECTOR_PRESETS } from "@/lib/sectors";
 import { countsAsSale, orderStatusLabel } from "@/lib/order-status";
@@ -153,7 +155,8 @@ export function StudioShell({ initial, me, children }: { initial: StoreData; me:
     { href: "/studio/contenu", label: "Pages, Récits & FAQ", icon: LayoutGrid },
     { href: "/studio/navigation", label: "Menus & Navigation", icon: Menu },
 
-    { href: "/studio/automatisations", label: "Automatisations & E-mails", icon: Zap, group: "Système & Sécurité" },
+    { href: "/studio/installation", label: "Installation & Connexions", icon: CheckCircle2, group: "Système & Sécurité" },
+    { href: "/studio/automatisations", label: "Automatisations & E-mails", icon: Zap },
     { href: "/studio/audit", label: "Contrôle d'Accès (IAM)", icon: ShieldCheck },
     { href: "/studio/parametres", label: "Paramètres Généraux", icon: Settings },
   ];
@@ -237,6 +240,11 @@ export function StudioShell({ initial, me, children }: { initial: StoreData; me:
   );
 }
 
+function SetupAdminRoute() {
+  const { me } = useStudio();
+  return <SetupAdmin myEmail={me.email} />;
+}
+
 export function StudioView() {
   const path = usePathname();
   if (path.startsWith("/studio/produits")) return <ProductsAdmin />;
@@ -246,6 +254,7 @@ export function StudioView() {
   if (path.startsWith("/studio/promotions")) return <PromotionsAdmin />;
   if (path.startsWith("/studio/automatisations")) return <AutomationsAdmin />;
   if (path.startsWith("/studio/audit")) return <AuditAdmin />;
+  if (path.startsWith("/studio/installation")) return <SetupAdminRoute />;
   if (path.startsWith("/studio/clients")) return <ClientsAdmin />;
   if (path.startsWith("/studio/contenu")) return <ContentAdmin />;
   if (path.startsWith("/studio/theme")) return <ThemeAdmin />;
@@ -861,42 +870,117 @@ function OrdersAdmin() {
 }
 
 function ClientsAdmin() {
-  const { data } = useStudio();
-  const clients = new Map<string, { name: string; email: string; orders: number; total: number }>();
+  const { data, me } = useStudio();
+  const [query, setQuery] = useState("");
+  const [blocked, setBlocked] = useState<Record<string, boolean>>({});
+  const [notice, setNotice] = useState("");
+  const accounts = data.customers || [];
+  const stats = new Map<string, { orders: number; total: number; last?: string }>();
   for (const order of data.orders) {
-    const current = clients.get(order.customer.email) ?? {
-      name: `${order.customer.firstName} ${order.customer.lastName}`,
-      email: order.customer.email,
-      orders: 0,
-      total: 0,
-    };
+    const key = order.customerId || `email:${order.customer.email}`;
+    const current = stats.get(key) ?? { orders: 0, total: 0 };
     current.orders += 1;
     if (countsAsSale(order.status)) current.total += order.total;
-    clients.set(order.customer.email, current);
+    if (!current.last || order.createdAt > current.last) current.last = order.createdAt;
+    stats.set(key, current);
   }
+  const needle = query.trim().toLowerCase();
+  const rows = accounts.filter((item) => !needle || `${item.firstName} ${item.lastName} ${item.email} ${item.phone}`.toLowerCase().includes(needle));
+  const guests = [...new Set(data.orders.filter((order) => !order.customerId).map((order) => order.customer.email))];
+  const subscribers = new Set(data.subscribers.map((item) => item.email));
   return (
     <div className="panel">
-      <PageHead title="Clients" text="Regroupés à partir des commandes." />
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Nom</th>
-            <th>E-mail</th>
-            <th>Commandes</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {[...clients.values()].map((client) => (
-            <tr key={client.email}>
-              <td>{client.name}</td>
-              <td>{client.email}</td>
-              <td>{client.orders}</td>
-              <td>{formatPrice(client.total)}</td>
+      <PageHead title="Clients" text={`${accounts.length} compte${accounts.length > 1 ? "s" : ""} client · ${data.subscribers.length} inscrit(s) à la newsletter`} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <input placeholder="Rechercher un nom, un e-mail, un téléphone…" value={query} onChange={(event) => setQuery(event.target.value)} style={{ flex: 1, minWidth: 220 }} />
+        <button
+          className="kd-btn ghost"
+          type="button"
+          onClick={() => {
+            const header = "prenom;nom;email;telephone;inscription;commandes;total_eur;newsletter;statut";
+            const lines = accounts.map((item) => {
+              const stat = stats.get(item.id);
+              return [item.firstName, item.lastName, item.email, item.phone, item.createdAt.slice(0, 10), stat?.orders ?? 0, ((stat?.total ?? 0) / 100).toFixed(2), subscribers.has(item.email) ? "oui" : "non", item.blocked ? "suspendu" : "actif"].join(";");
+            });
+            const url = URL.createObjectURL(new Blob([[header, ...lines].join("\n")], { type: "text/csv" }));
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "clients.csv";
+            link.click();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          Exporter (CSV)
+        </button>
+      </div>
+      {notice ? <p className="note" role="status">{notice}</p> : null}
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th>Inscription</th>
+              <th>Commandes</th>
+              <th>Total</th>
+              <th>Dernière commande</th>
+              <th>Statut</th>
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((client) => {
+              const stat = stats.get(client.id);
+              const isBlocked = blocked[client.id] ?? client.blocked;
+              return (
+                <tr key={client.id}>
+                  <td>
+                    <strong>
+                      {client.firstName} {client.lastName}
+                    </strong>
+                    <div className="note">
+                      {client.email}
+                      {client.phone ? ` · ${client.phone}` : ""}
+                    </div>
+                    <div className="note">{client.addresses.length} adresse(s) · {client.wishlist.length} favori(s){subscribers.has(client.email) ? " · newsletter" : ""}</div>
+                  </td>
+                  <td>{new Date(client.createdAt).toLocaleDateString("fr-FR")}</td>
+                  <td>{stat?.orders ?? 0}</td>
+                  <td>{formatPrice(stat?.total ?? 0)}</td>
+                  <td>{stat?.last ? new Date(stat.last).toLocaleDateString("fr-FR") : "—"}</td>
+                  <td>{isBlocked ? "Suspendu" : "Actif"}</td>
+                  <td>
+                    {can(me.role, "orders") ? (
+                      <button
+                        className="kd-btn ghost"
+                        type="button"
+                        onClick={async () => {
+                          if (!isBlocked && !window.confirm(`Suspendre le compte ${client.email} ? Le client sera déconnecté et ne pourra plus commander.`)) return;
+                          try {
+                            await setCustomerBlocked(client.id, !isBlocked);
+                            setBlocked((current) => ({ ...current, [client.id]: !isBlocked }));
+                            setNotice(!isBlocked ? "Compte suspendu." : "Compte réactivé.");
+                          } catch (error) {
+                            setNotice(error instanceof Error ? error.message : "Échec");
+                          }
+                        }}
+                      >
+                        {isBlocked ? "Réactiver" : "Suspendre"}
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {!rows.length ? <p className="note">Aucun compte client{needle ? " pour cette recherche" : " pour le moment"}.</p> : null}
+      {guests.length ? (
+        <p className="note" style={{ marginTop: 16 }}>
+          {guests.length} commande(s) plus ancienne(s) passée(s) sans compte : {guests.slice(0, 8).join(", ")}
+          {guests.length > 8 ? "…" : ""}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1721,7 +1805,11 @@ function AutomationsAdmin() {
     setSending(true);
     try {
       const log = await sendTestAutomationEmail(selectedSlug, testEmail);
-      setFeedback(`E-mail de test (${log.templateSlug}) envoyé à ${log.recipient}. Enregistré avec la clé d'idempotence : ${log.idempotencyKey}`);
+      setFeedback(
+        log.status === "envoye"
+          ? `E-mail de test (${log.templateSlug}) envoyé à ${log.recipient}.`
+          : `E-mail non envoyé : ${log.errorMessage || log.status}. Configurez Resend dans Installation & Connexions.`,
+      );
       setTimeout(() => setFeedback(null), 6000);
     } catch {
       setFeedback("Erreur lors de l'envoi de l'e-mail de test.");
@@ -1853,9 +1941,20 @@ function AutomationsAdmin() {
                 <td>{log.recipient}</td>
                 <td>{log.subject}</td>
                 <td>
-                  <span style={{ fontSize: 11, color: "#065f46", background: "#ecfdf5", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>
-                    ✓ {log.status}
+                  <span
+                    title={log.errorMessage}
+                    style={{
+                      fontSize: 11,
+                      padding: "2px 7px",
+                      borderRadius: 4,
+                      fontWeight: 600,
+                      color: log.status === "envoye" ? "#065f46" : log.status === "echec" ? "#991b1b" : "#92400e",
+                      background: log.status === "envoye" ? "#ecfdf5" : log.status === "echec" ? "#fee2e2" : "#fef3c7",
+                    }}
+                  >
+                    {log.status === "envoye" ? "Envoyé" : log.status === "echec" ? "Échec" : log.status === "simule" ? "Non envoyé (aucun service)" : "En attente"}
                   </span>
+                  {log.errorMessage ? <div className="note">{log.errorMessage}</div> : null}
                 </td>
               </tr>
             ))}

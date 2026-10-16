@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { currentUser, toPublicUser } from "@/lib/auth";
+import { toPublicCustomer } from "@/lib/customer-auth";
 import { can } from "@/lib/permissions";
 import { readStore } from "@/lib/store";
 import { StudioShell } from "@/components/studio/studio";
@@ -22,6 +23,8 @@ export default async function Layout({ children }: { children: ReactNode }) {
     emailLogs: can(user.role, "automations") ? data.emailLogs : [],
     auditLogs: can(user.role, "team") ? data.auditLogs : [],
     adminUsers: (can(user.role, "team") ? data.adminUsers || [] : [user]).map(toPublicUser),
+    customers: can(user.role, "orders") ? (data.customers || []).map((item) => ({ ...toPublicCustomer(item), passwordHash: "", sessionVersion: 0 })) : [],
+    integrations: {},
   };
   return (
     <StudioShell initial={visible} me={toPublicUser(user)}>

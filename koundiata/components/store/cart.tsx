@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { getWishlist, setWishlist } from "@/lib/customer-actions";
 
 export type CartLine = { productId: string; qty: number };
 
@@ -44,9 +45,28 @@ export function CartProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("koundiata-cart", JSON.stringify(lines));
   }, [lines, ready]);
 
+  // Favoris liés au compte client : fusion au chargement, puis synchronisation à chaque changement.
+  const accountWish = useRef<"unknown" | "guest" | "account">("unknown");
+  useEffect(() => {
+    if (!ready) return;
+    getWishlist()
+      .then((server) => {
+        if (server === null) {
+          accountWish.current = "guest";
+          return;
+        }
+        accountWish.current = "account";
+        setWish((local) => [...new Set([...server, ...local])]);
+      })
+      .catch(() => {
+        accountWish.current = "guest";
+      });
+  }, [ready]);
+
   useEffect(() => {
     if (!ready) return;
     localStorage.setItem("koundiata-wish", JSON.stringify(wish));
+    if (accountWish.current === "account") setWishlist(wish).catch(() => {});
   }, [wish, ready]);
 
   const api = useMemo<CartApi>(

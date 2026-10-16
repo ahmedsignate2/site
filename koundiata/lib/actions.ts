@@ -5,7 +5,9 @@ import { revalidatePath } from "next/cache";
 import { isEmail, uid } from "@/lib/format";
 import { createCardCheckout, getStripe, simulatedAuthorization, stripeEnabled } from "@/lib/payment";
 import { requirePermission } from "@/lib/auth";
-import { newCancelToken, newOrderId, releaseUnpaidOrder } from "@/lib/orders";
+import { newCancelToken, newOrderId, notifyOrderPaid, releaseUnpaidOrder } from "@/lib/orders";
+import { currentCustomer } from "@/lib/customer-auth";
+import { siteOrigin } from "@/lib/origin";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { shippingCost } from "@/lib/catalog";
 import { restoreStock, takeStock } from "@/lib/stock";
@@ -72,40 +74,66 @@ export async function discardDraft() {
   return data.draft;
 }
 
+function promoDiscount(promo: PromoCode | undefined, subtotalCents: number) {
+  if (!promo || !promo.active) return { error: "Code promotionnel invalide ou inactif." };
+  if (promo.expiresAt && new Date(promo.expiresAt) < new Date()) return { error: "Ce code a expiré." };
+  if (promo.maxUses && promo.usedCount >= promo.maxUses) return { error: "Ce code a atteint sa limite d'utilisation." };
+  if (subtotalCents < promo.minPurchaseCents) {
+    return { error: `Minimum d'achat de ${(promo.minPurchaseCents / 100).toFixed(2)} € requis pour ce code.` };
+  }
+  const discountCents =
+    promo.discountType === "percent"
+      ? Math.round((subtotalCents * Math.min(100, promo.discountValue)) / 100)
+      : Math.min(subtotalCents, promo.discountValue);
+  return { discountCents };
+}
+
 export async function placeOrder(input: CheckoutInput) {
   if (!(await throttle("order", 20, 10 * 60_000))) {
     return { ok: false as const, errors: { form: "Trop de tentatives. Réessayez dans quelques minutes." } as Record<string, string> };
   }
+  // Le compte client est obligatoire pour commander.
+  const customer = await currentCustomer();
+  if (!customer) {
+    return { ok: false as const, needsLogin: true, errors: { form: "Connectez-vous ou créez un compte pour commander." } as Record<string, string> };
+  }
   const errors: Record<string, string> = {};
   if (!input.firstName.trim()) errors.firstName = "Indiquez votre prénom.";
   if (!input.lastName.trim()) errors.lastName = "Indiquez votre nom.";
-  if (!isEmail(input.email)) errors.email = "Indiquez une adresse e-mail valide.";
-  if (input.phone.trim().length < 8) errors.phone = "Indiquez un téléphone.";
+  if (input.phone.replace(/\D/g, "").length < 8) errors.phone = "Indiquez un téléphone.";
   if (input.address.trim().length < 4) errors.address = "Indiquez une adresse.";
-  if (!/^\d{5}$/.test(input.postal.trim())) errors.postal = "Le code postal doit comporter 5 chiffres.";
+  if (!/^[A-Za-z0-9 -]{3,10}$/.test(input.postal.trim())) errors.postal = "Code postal invalide.";
   if (!input.city.trim()) errors.city = "Indiquez une ville.";
   if (!input.items.length) errors.form = "Votre panier est vide.";
+  if (!input.acceptTerms) errors.form = "Acceptez les conditions générales de vente pour commander.";
 
   if (Object.keys(errors).length) {
     return { ok: false as const, errors };
   }
 
+  const email = customer.email;
   try {
     const orderId = newOrderId();
     const cancelToken = newCancelToken();
-    const liveCard = stripeEnabled();
-    const headerList = await headers();
-    const proto = headerList.get("x-forwarded-proto") ?? "http";
-    const host = headerList.get("x-forwarded-host") ?? headerList.get("host") ?? "127.0.0.1:3847";
-    const origin = process.env.NEXT_PUBLIC_SITE_URL || `${proto}://${host}`;
+    const liveCard = await stripeEnabled();
+    const origin = await siteOrigin();
     let items: OrderItem[] = [];
     let subtotal = 0;
     let shipping = 0;
-    let brandName = "";
-    let supportEmail = "";
+    let discount = 0;
+    let promoCode: string | undefined;
+    let total = 0;
+    const shippingAddress = {
+      firstName: input.firstName.trim(),
+      lastName: input.lastName.trim(),
+      email,
+      phone: input.phone.trim(),
+      address: input.address.trim(),
+      postal: input.postal.trim(),
+      city: input.city.trim(),
+      country: input.country.trim() || "France",
+    };
     await updateStore((data) => {
-      brandName = data.published.settings.brandName;
-      supportEmail = data.published.settings.supportEmail;
       items = input.items.map((line) => {
         // Seuls les produits publiés sont vendables : le brouillon n'est pas encore en ligne.
         const product = data.published.products.find((item) => item.id === line.productId);
@@ -120,7 +148,16 @@ export async function placeOrder(input: CheckoutInput) {
         };
       });
       subtotal = items.reduce((sum, item) => sum + item.price * item.qty, 0);
-      shipping = shippingCost(data.published, subtotal);
+      if (input.promoCode?.trim()) {
+        const promo = (data.promoCodes || []).find((item) => item.code.toUpperCase() === input.promoCode!.trim().toUpperCase());
+        const result = promoDiscount(promo, subtotal);
+        if ("error" in result) throw new Error(result.error);
+        discount = result.discountCents;
+        promoCode = promo!.code;
+        promo!.usedCount += 1;
+      }
+      shipping = shippingCost(data.published, subtotal - discount);
+      total = subtotal - discount + shipping;
       takeStock(data, items);
       data.orders.unshift({
         id: orderId,
@@ -129,46 +166,56 @@ export async function placeOrder(input: CheckoutInput) {
         demo: false,
         stockHeld: true,
         cancelToken,
+        customerId: customer.id,
         payment: liveCard
           ? { provider: "stripe", status: "pending", reference: "" }
           : { provider: "simulated", status: "authorized", reference: `sim_${orderId}` },
-        customer: {
-          firstName: input.firstName.trim(),
-          lastName: input.lastName.trim(),
-          email: input.email.trim().toLowerCase(),
-          phone: input.phone.trim(),
-          address: input.address.trim(),
-          postal: input.postal.trim(),
-          city: input.city.trim(),
-          country: input.country.trim() || "France",
-        },
+        customer: shippingAddress,
         items,
         subtotal,
         shipping,
-        total: subtotal + shipping,
+        discount: discount || undefined,
+        promoCode,
+        total,
       });
+      // Mémoriser l'adresse dans le carnet du client s'il ne l'a pas encore.
+      const account = data.customers?.find((item) => item.id === customer.id);
+      if (account && input.saveAddress) {
+        const known = account.addresses.some(
+          (item) => item.address === shippingAddress.address && item.postal === shippingAddress.postal && item.city === shippingAddress.city,
+        );
+        if (!known && account.addresses.length < 10) {
+          account.addresses.push({
+            id: uid("adr"),
+            label: account.addresses.length ? "Autre adresse" : "Domicile",
+            firstName: shippingAddress.firstName,
+            lastName: shippingAddress.lastName,
+            phone: shippingAddress.phone,
+            address: shippingAddress.address,
+            postal: shippingAddress.postal,
+            city: shippingAddress.city,
+            country: shippingAddress.country,
+            isDefault: account.addresses.length === 0,
+          });
+        }
+      }
     });
 
     if (!liveCard) {
-      dispatchAutomation("order.created", input.email.trim().toLowerCase(), {
-        order_id: orderId,
-        customer_name: `${input.firstName} ${input.lastName}`,
-        total_amount: `${((subtotal + shipping) / 100).toFixed(2)} €`,
-        shipping_address: `${input.address}, ${input.postal} ${input.city}`,
-        brand_name: brandName,
-        support_email: supportEmail,
-      }).catch(() => {});
-      logAuditEvent("order.created", "Commandes", `Nouvelle commande simulée ${orderId} (${((subtotal + shipping) / 100).toFixed(2)} €)`).catch(() => {});
-      await simulatedAuthorization(subtotal + shipping, orderId);
+      await notifyOrderPaid(orderId);
+      logAuditEvent("order.created", "Commandes", `Nouvelle commande simulée ${orderId} (${(total / 100).toFixed(2)} €)`).catch(() => {});
+      await simulatedAuthorization(total, orderId);
       touch();
       return { ok: true as const, orderId, redirectUrl: null as string | null };
     }
     try {
       const checkout = await createCardCheckout({
         orderId,
-        email: input.email.trim().toLowerCase(),
+        email,
         items,
         shippingCents: shipping,
+        discountCents: discount,
+        promoCode,
         origin,
         cancelToken,
       });
@@ -273,7 +320,7 @@ export async function processOrderRefund(id: string, amountCents: number, reason
   // Paiement réel : le remboursement passe par Stripe avant d'être enregistré.
   let refundReference = `re_sim_${Date.now()}`;
   if (current.payment?.provider === "stripe") {
-    const stripe = getStripe();
+    const stripe = await getStripe();
     if (!stripe) throw new Error("Stripe n'est pas configuré : remboursement impossible.");
     const session = await stripe.checkout.sessions.retrieve(current.payment.reference);
     const paymentIntent = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
@@ -322,19 +369,10 @@ export async function validatePromoCode(code: string, subtotalCents: number) {
   if (!(await throttle("promo", 30, 10 * 60_000))) return { valid: false as const, error: "Trop de tentatives. Réessayez plus tard." };
   const data = await readStore();
   const clean = code.trim().toUpperCase();
-  const promo = (data.promoCodes || []).find((p) => p.code.toUpperCase() === clean && p.active);
-  if (!promo) return { valid: false as const, error: "Code promotionnel invalide ou inactif." };
-  if (subtotalCents < promo.minPurchaseCents) {
-    return {
-      valid: false as const,
-      error: `Minimum d'achat de ${(promo.minPurchaseCents / 100).toFixed(2)} € requis pour ce code.`,
-    };
-  }
-  const discountCents =
-    promo.discountType === "percent"
-      ? Math.round((subtotalCents * promo.discountValue) / 100)
-      : Math.min(subtotalCents, promo.discountValue);
-  return { valid: true as const, code: promo.code, discountCents };
+  const promo = (data.promoCodes || []).find((p) => p.code.toUpperCase() === clean);
+  const result = promoDiscount(promo, subtotalCents);
+  if ("error" in result) return { valid: false as const, error: result.error as string };
+  return { valid: true as const, code: promo!.code, discountCents: result.discountCents };
 }
 
 export async function switchSectorPreset(sector: BusinessSector) {
@@ -396,27 +434,28 @@ export async function switchSectorPreset(sector: BusinessSector) {
 export async function sendTestAutomationEmail(templateSlug: string, recipient: string) {
   const user = await requirePermission("automations");
   if (!isEmail(recipient)) throw new Error("Adresse e-mail invalide.");
-  const log = await dispatchAutomation(
+const log = await dispatchAutomation(
     "order.created",
     recipient,
     {
-      order_id: "KD-98214",
-      customer_name: "Ahmed (Test Studio)",
+      order_id: "KD-TEST-0001",
+      customer_name: user.name,
       total_amount: "49,90 €",
       carrier: "Colissimo Suivi",
       tracking_number: "6A98214567FR",
       tracking_url: "https://www.laposte.fr",
       refund_amount: "24,90 €",
       refund_reason: "Démonstration remboursement",
-      product_name: "Sérum Éclat Niacinamide",
-      product_sku: "KD-SR-30",
+      product_name: "Produit de démonstration",
+      product_sku: "DEMO-001",
       stock_remaining: "2",
       stock_threshold: "10",
       reorder_qty: "50",
       studio_product_url: "/studio/produits",
-      brand_name: "Koundiata OS",
-      support_email: "support@koundiata.fr",
-      shipping_address: "14 Boulevard Haussmann, 75009 Paris",
+      shipping_address: "1 rue de l'Exemple, 75001 Paris",
+      account_url: "/compte",
+      reset_url: "/compte/mot-de-passe-oublie",
+      studio_order_url: "/studio/commandes",
     },
     templateSlug,
   );
@@ -541,5 +580,20 @@ export async function markMessageRead(id: string) {
     const message = data.messages.find((item) => item.id === id);
     if (message) message.read = true;
   });
+  touch();
+}
+
+/** Suspend ou réactive un compte client (studio). Un compte suspendu est déconnecté et ne peut plus commander. */
+export async function setCustomerBlocked(id: string, blocked: boolean) {
+  const user = await requirePermission("orders");
+  let email = "";
+  await updateStore((data) => {
+    const customer = data.customers?.find((item) => item.id === id);
+    if (!customer) throw new Error("Client introuvable.");
+    customer.blocked = blocked;
+    customer.sessionVersion += 1;
+    email = customer.email;
+  });
+  logAuditEvent(blocked ? "customer.block" : "customer.unblock", "Clients", `Compte ${email} ${blocked ? "suspendu" : "réactivé"}`, user).catch(() => {});
   touch();
 }

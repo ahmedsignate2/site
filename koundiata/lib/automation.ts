@@ -1,4 +1,5 @@
 import { uid } from "@/lib/format";
+import { sendEmail } from "@/lib/mailer";
 import { readStore, updateStore } from "@/lib/store";
 import type { AutomationEventName, EmailLog, EmailTemplate } from "@/lib/types";
 
@@ -74,13 +75,75 @@ export const DEFAULT_EMAIL_TEMPLATES: EmailTemplate[] = [
 </div>`,
     variables: ["product_name", "product_sku", "stock_remaining", "stock_threshold", "reorder_qty", "studio_product_url"],
   },
+  {
+    slug: "customer_welcome",
+    name: "Bienvenue (création de compte)",
+    category: "compte",
+    subject: "Bienvenue chez {{brand_name}}",
+    bodyHtml: `
+<div style="font-family: sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #111;">Bienvenue, {{customer_name}} !</h2>
+  <p>Votre compte {{brand_name}} est créé. Vous pouvez suivre vos commandes, enregistrer vos adresses et retrouver vos favoris depuis votre espace client.</p>
+  <p><a href="{{account_url}}" style="display: inline-block; background: #111; color: #fff; padding: 10px 18px; border-radius: 4px; text-decoration: none;">Accéder à mon compte</a></p>
+  <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
+  <p style="font-size: 12px; color: #888;">{{brand_name}} - {{support_email}}</p>
+</div>`,
+    variables: ["customer_name", "brand_name", "account_url", "support_email"],
+  },
+  {
+    slug: "customer_password_reset",
+    name: "Mot de passe oublié",
+    category: "compte",
+    subject: "Réinitialisez votre mot de passe {{brand_name}}",
+    bodyHtml: `
+<div style="font-family: sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #111;">Nouveau mot de passe</h2>
+  <p>Bonjour {{customer_name}}, vous avez demandé à réinitialiser votre mot de passe. Ce lien est valable 1 heure :</p>
+  <p><a href="{{reset_url}}" style="display: inline-block; background: #111; color: #fff; padding: 10px 18px; border-radius: 4px; text-decoration: none;">Choisir un nouveau mot de passe</a></p>
+  <p style="font-size: 13px; color: #666;">Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail : votre mot de passe reste inchangé.</p>
+  <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
+  <p style="font-size: 12px; color: #888;">{{brand_name}}</p>
+</div>`,
+    variables: ["customer_name", "reset_url", "brand_name"],
+  },
+  {
+    slug: "admin_new_order",
+    name: "Nouvelle commande (équipe)",
+    category: "admin",
+    subject: "Nouvelle commande {{order_id}} - {{total_amount}}",
+    bodyHtml: `
+<div style="font-family: sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #111;">Nouvelle commande payée</h2>
+  <p>Commande <strong>{{order_id}}</strong> de {{customer_name}} pour <strong>{{total_amount}}</strong>.</p>
+  <p>Livraison : {{shipping_address}}</p>
+  <p><a href="{{studio_order_url}}" style="background: #111; color: #fff; padding: 8px 14px; text-decoration: none; border-radius: 4px; display: inline-block;">Ouvrir dans le studio</a></p>
+</div>`,
+    variables: ["order_id", "customer_name", "total_amount", "shipping_address", "studio_order_url"],
+  },
 ];
 
-export function interpolateTemplate(template: string, vars: Record<string, string>): string {
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] as string);
+}
+
+export function interpolateTemplate(template: string, vars: Record<string, string>, html = false): string {
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
-    return vars[key] ?? `{{${key}}}`;
+    const value = vars[key];
+    if (value === undefined) return "";
+    return html ? escapeHtml(value) : value;
   });
 }
+
+const EVENT_TEMPLATES: Partial<Record<AutomationEventName, string>> = {
+  "order.created": "order_confirmation",
+  "payment.succeeded": "order_confirmation",
+  "order.shipped": "order_shipped",
+  "order.refunded": "order_refunded",
+  "stock.low": "stock_alert_admin",
+  "customer.welcome": "customer_welcome",
+  "customer.password_reset": "customer_password_reset",
+  "admin.new_order": "admin_new_order",
+};
 
 export async function dispatchAutomation(
   event: AutomationEventName,
@@ -90,19 +153,22 @@ export async function dispatchAutomation(
 ): Promise<EmailLog> {
   const store = await readStore();
   const templates = store.emailTemplates && store.emailTemplates.length > 0 ? store.emailTemplates : DEFAULT_EMAIL_TEMPLATES;
-  
-  let targetSlug = templateSlug;
-  if (!targetSlug) {
-    if (event === "order.created" || event === "payment.succeeded") targetSlug = "order_confirmation";
-    else if (event === "order.shipped") targetSlug = "order_shipped";
-    else if (event === "order.refunded") targetSlug = "order_refunded";
-    else if (event === "stock.low") targetSlug = "stock_alert_admin";
-    else targetSlug = "order_confirmation";
-  }
+  const targetSlug = templateSlug || EVENT_TEMPLATES[event] || "order_confirmation";
+  const tmpl =
+    templates.find((t) => t.slug === targetSlug) ?? DEFAULT_EMAIL_TEMPLATES.find((t) => t.slug === targetSlug) ?? templates[0];
+  const settings = store.published.settings;
+  const vars = { brand_name: settings.brandName, support_email: settings.supportEmail, ...variables };
+  const renderedSubject = interpolateTemplate(tmpl.subject, vars);
+  const renderedBody = interpolateTemplate(tmpl.bodyHtml, vars, true);
+  const idempotencyKey = `${event}_${recipient}_${variables.order_id || variables.product_sku || uid("evt")}`;
 
-  const tmpl = templates.find((t) => t.slug === targetSlug) ?? templates[0];
-  const renderedSubject = interpolateTemplate(tmpl.subject, variables);
-  const idempotencyKey = `${event}_${recipient}_${variables.order_id || variables.product_sku || "evt"}_${Date.now().toString().slice(0, 8)}`;
+  const result = await sendEmail({
+    to: recipient,
+    subject: renderedSubject,
+    html: renderedBody,
+    replyTo: settings.supportEmail || undefined,
+    idempotencyKey,
+  });
 
   const logEntry: EmailLog = {
     id: uid("log"),
@@ -110,16 +176,16 @@ export async function dispatchAutomation(
     recipient: recipient.toLowerCase(),
     subject: renderedSubject,
     templateSlug: tmpl.slug,
-    status: "envoye",
+    status: result.status,
     sentAt: new Date().toISOString(),
+    errorMessage: result.error,
     idempotencyKey,
   };
 
   await updateStore((data) => {
     if (!data.emailLogs) data.emailLogs = [];
     data.emailLogs.unshift(logEntry);
-    // Limite l'historique aux 100 derniers envois
-    if (data.emailLogs.length > 100) data.emailLogs.pop();
+    if (data.emailLogs.length > 300) data.emailLogs.length = 300;
   });
 
   return logEntry;

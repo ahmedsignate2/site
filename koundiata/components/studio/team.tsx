@@ -35,7 +35,7 @@ export function TeamPanel({ initial, me }: { initial: PublicAdminUser[]; me: Pub
     <div style={{ marginBottom: 28 }}>
       <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Équipe et rôles</h3>
       <p className="note" style={{ marginBottom: 14 }}>
-        Chaque action du studio est vérifiée côté serveur selon le rôle. Un changement de rôle ou de mot de passe ferme les sessions ouvertes du compte.
+        Chaque action du studio est vérifiée côté serveur selon le rôle. Le propriétaire principal a tous les droits et personne ne peut le modifier, le rétrograder ni le désactiver. Un changement de rôle ou de mot de passe ferme les sessions ouvertes du compte.
       </p>
       {notice ? (
         <p className="note" role="status" style={{ marginBottom: 12 }}>
@@ -58,12 +58,13 @@ export function TeamPanel({ initial, me }: { initial: PublicAdminUser[]; me: Pub
               <tr key={user.id}>
                 <td>
                   <strong>{user.name}</strong>
+                  {user.primary ? <span className="badge-count" style={{ marginLeft: 8, display: "inline-grid" }}>Principal</span> : null}
                   <div className="note">{user.email}</div>
                 </td>
                 <td>
                   <select
                     value={user.role}
-                    disabled={busy || user.id === me.id}
+                    disabled={busy || user.id === me.id || user.primary}
                     aria-label={`Rôle de ${user.name}`}
                     onChange={(event) => run(() => updateStaff(user.id, { role: event.target.value as AdminRole }), "Rôle modifié.")}
                   >
@@ -78,7 +79,7 @@ export function TeamPanel({ initial, me }: { initial: PublicAdminUser[]; me: Pub
                 <td className="note">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString("fr-FR") : "Jamais"}</td>
                 <td>
                   <div className="row-actions">
-                    {user.id !== me.id ? (
+                    {user.id !== me.id && !user.primary ? (
                       <button
                         className="kd-btn ghost"
                         type="button"
@@ -88,6 +89,7 @@ export function TeamPanel({ initial, me }: { initial: PublicAdminUser[]; me: Pub
                         {user.active ? "Désactiver" : "Réactiver"}
                       </button>
                     ) : null}
+                    {!user.primary || user.id === me.id ? (
                     <button
                       className="kd-btn ghost"
                       type="button"
@@ -99,6 +101,9 @@ export function TeamPanel({ initial, me }: { initial: PublicAdminUser[]; me: Pub
                     >
                       Mot de passe
                     </button>
+                    ) : (
+                      <span className="note">Protégé</span>
+                    )}
                   </div>
                 </td>
               </tr>

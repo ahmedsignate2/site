@@ -5,6 +5,7 @@ import { restoreStock } from "@/lib/stock";
 import { readStore, updateStore } from "@/lib/store";
 import { dispatchAutomation } from "@/lib/automation";
 import { logAuditEvent } from "@/lib/audit";
+import { getConfig } from "@/lib/config";
 
 /*
  * Opérations internes sur les commandes.
@@ -38,37 +39,45 @@ export async function getOrder(id: string) {
   return data.orders.find((order) => order.id === id) ?? null;
 }
 
-export async function markOrderPaid(id: string, reference: string) {
-  let customerEmail = "";
-  let customerName = "";
-  let brand = "Boutique";
-  let supportEmail = "";
-  let totalFormatted = "";
-  let shippingAddress = "";
+/** E-mails envoyés quand une commande est payée : confirmation au client, alerte à l'équipe. */
+export async function notifyOrderPaid(id: string) {
+  const order = await getOrder(id);
+  if (!order) return;
+  const config = await getConfig();
+  const total = `${(order.total / 100).toFixed(2).replace(".", ",")} €`;
+  const shippingAddress = `${order.customer.address}, ${order.customer.postal} ${order.customer.city}, ${order.customer.country}`;
+  await dispatchAutomation("order.created", order.customer.email, {
+    order_id: id,
+    customer_name: `${order.customer.firstName} ${order.customer.lastName}`,
+    total_amount: total,
+    shipping_address: shippingAddress,
+  }).catch(() => {});
+  if (config.adminNotifyEmail) {
+    const origin = config.siteUrl || "";
+    await dispatchAutomation("admin.new_order", config.adminNotifyEmail, {
+      order_id: id,
+      customer_name: `${order.customer.firstName} ${order.customer.lastName}`,
+      total_amount: total,
+      shipping_address: shippingAddress,
+      studio_order_url: `${origin}/studio/commandes`,
+    }).catch(() => {});
+  }
+}
 
+export async function markOrderPaid(id: string, reference: string) {
+  let changed = false;
+  let total = 0;
   await updateStore((data) => {
     const order = data.orders.find((item) => item.id === id);
     if (!order || order.status !== "en_attente") return;
     order.status = "payee";
     order.payment = { provider: "stripe", status: "authorized", reference };
-    customerEmail = order.customer.email;
-    customerName = `${order.customer.firstName} ${order.customer.lastName}`;
-    brand = data.published.settings.brandName;
-    supportEmail = data.published.settings.supportEmail;
-    totalFormatted = `${(order.total / 100).toFixed(2)} €`;
-    shippingAddress = `${order.customer.address}, ${order.customer.postal} ${order.customer.city}`;
+    changed = true;
+    total = order.total;
   });
-
-  if (customerEmail) {
-    dispatchAutomation("order.created", customerEmail, {
-      order_id: id,
-      customer_name: customerName,
-      total_amount: totalFormatted,
-      shipping_address: shippingAddress,
-      brand_name: brand,
-      support_email: supportEmail,
-    }).catch(() => {});
-    logAuditEvent("order.paid", "Commandes", `Paiement Stripe confirmé pour ${id} (${totalFormatted})`).catch(() => {});
+  if (changed) {
+    await notifyOrderPaid(id);
+    logAuditEvent("order.paid", "Commandes", `Paiement Stripe confirmé pour ${id} (${(total / 100).toFixed(2)} €)`).catch(() => {});
   }
   touch();
 }
@@ -92,7 +101,7 @@ export async function releaseUnpaidOrder(id: string) {
 export async function cancelCheckout(id: string, token: string) {
   const order = await getOrder(id);
   if (!order || order.status !== "en_attente" || !order.cancelToken || order.cancelToken !== token) return;
-  const stripe = getStripe();
+  const stripe = await getStripe();
   const reference = order.payment?.reference;
   if (stripe && reference) {
     try {
@@ -107,8 +116,8 @@ export async function cancelCheckout(id: string, token: string) {
 }
 
 export async function settleCheckoutReturn(orderId: string, sessionId?: string) {
-  if (sessionId && stripeEnabled()) {
-    const stripe = getStripe();
+  if (sessionId && (await stripeEnabled())) {
+    const stripe = await getStripe();
     if (stripe) {
       const session = await stripe.checkout.sessions.retrieve(sessionId);
       if (session.metadata?.orderId === orderId && session.payment_status === "paid") {

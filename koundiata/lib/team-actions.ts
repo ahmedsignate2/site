@@ -49,6 +49,7 @@ async function bootstrapOwner(email: string, password: string): Promise<AdminUse
       email: envEmail,
       role: "owner",
       active: true,
+      primary: true,
       passwordHash,
       sessionVersion: 0,
     };
@@ -88,7 +89,8 @@ export async function login(_state: LoginState, form: FormData): Promise<LoginSt
   });
   await setSessionCookie(user);
   logAuditEvent("auth.login", "Studio", `Connexion de ${user.email}`, user).catch(() => {});
-  redirect(safeNext(form.get("next")));
+  // Première installation : on guide le propriétaire vers le branchement des services.
+  redirect(hasAccounts ? safeNext(form.get("next")) : "/studio/installation");
 }
 
 export async function logout() {
@@ -128,6 +130,7 @@ export async function updateStaff(id: string, patch: { role?: AdminRole; active?
     const users = data.adminUsers || [];
     const user = users.find((item) => item.id === id);
     if (!user) throw new Error("Compte introuvable.");
+    if (user.primary && id !== actor.id) throw new Error("Le propriétaire principal ne peut être ni modifié, ni rétrogradé, ni désactivé.");
     if (id === actor.id && (patch.active === false || (patch.role && patch.role !== user.role))) {
       throw new Error("Vous ne pouvez pas modifier votre propre rôle ni désactiver votre compte.");
     }
@@ -155,6 +158,7 @@ export async function resetStaffPassword(id: string, password: string) {
   await updateStore((data) => {
     const user = data.adminUsers?.find((item) => item.id === id);
     if (!user) throw new Error("Compte introuvable.");
+    if (user.primary && id !== actor.id) throw new Error("Seul le propriétaire principal peut changer son propre mot de passe.");
     user.passwordHash = passwordHash;
     user.sessionVersion = (user.sessionVersion ?? 0) + 1;
   });

@@ -16,13 +16,9 @@ const sans = Montserrat({
   variable: "--font-body",
 });
 
+// Titre et description réels : définis par la vitrine à partir des réglages du studio.
 export const metadata: Metadata = {
-  title: {
-    default: "KOUNDIATA — La beauté, avec intention.",
-    template: "%s — KOUNDIATA",
-  },
-  description:
-    "Soins, parfums et maquillage KOUNDIATA. Une maison de beauté à personnaliser depuis le studio.",
+  title: { default: "Boutique", template: "%s" },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

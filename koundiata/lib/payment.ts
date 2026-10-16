@@ -1,23 +1,24 @@
 import Stripe from "stripe";
+import { getConfig } from "@/lib/config";
 import type { OrderItem, PaymentRecord } from "@/lib/types";
 
-export function stripeEnabled() {
-  return Boolean(process.env.STRIPE_SECRET_KEY);
+export async function stripeEnabled() {
+  return Boolean((await getConfig()).stripeSecretKey);
 }
 
-let stripeClient: Stripe | null = null;
+let stripeClient: { key: string; client: Stripe } | null = null;
 
-export function getStripe() {
-  const key = process.env.STRIPE_SECRET_KEY;
+export async function getStripe() {
+  const key = (await getConfig()).stripeSecretKey;
   if (!key) return null;
-  if (!stripeClient) stripeClient = new Stripe(key);
-  return stripeClient;
+  if (!stripeClient || stripeClient.key !== key) stripeClient = { key, client: new Stripe(key) };
+  return stripeClient.client;
 }
 
 export function paymentNotice(live: boolean) {
   return live
     ? "Vous serez redirigé vers Stripe pour payer par carte. La commande n'est confirmée qu'une fois le paiement accepté."
-    : "Paiement simulé : aucune carte n'est débitée. Ajoutez STRIPE_SECRET_KEY pour encaisser vraiment.";
+    : "Paiement simulé : aucune carte n'est débitée. Ajoutez la clé Stripe dans Studio → Installation pour encaisser vraiment.";
 }
 
 export async function simulatedAuthorization(amountCents: number, orderId: string): Promise<PaymentRecord> {
@@ -32,10 +33,12 @@ export async function createCardCheckout(input: {
   email: string;
   items: OrderItem[];
   shippingCents: number;
+  discountCents?: number;
+  promoCode?: string;
   origin: string;
   cancelToken: string;
 }) {
-  const stripe = getStripe();
+  const stripe = await getStripe();
   if (!stripe) throw new Error("Stripe n'est pas configuré.");
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = input.items.map((item) => ({
     quantity: item.qty,
@@ -55,8 +58,21 @@ export async function createCardCheckout(input: {
       },
     });
   }
+  // Remise : coupon Stripe à usage unique, du montant exact calculé côté serveur.
+  let discounts: Stripe.Checkout.SessionCreateParams.Discount[] | undefined;
+  if (input.discountCents && input.discountCents > 0) {
+    const coupon = await stripe.coupons.create({
+      amount_off: input.discountCents,
+      currency: "eur",
+      duration: "once",
+      max_redemptions: 1,
+      name: input.promoCode ? `Code ${input.promoCode}` : "Remise",
+    });
+    discounts = [{ coupon: coupon.id }];
+  }
   const session = await stripe.checkout.sessions.create({
     mode: "payment",
+    ...(discounts ? { discounts } : {}),
     locale: "fr",
     customer_email: input.email,
     client_reference_id: input.orderId,

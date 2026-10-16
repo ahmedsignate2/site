@@ -21,7 +21,7 @@ import {
 import { categoryById, categoryBySlug, productsFor, relatedProducts, shippingCost } from "@/lib/catalog";
 import { formatPrice } from "@/lib/format";
 import { themeStyle } from "@/lib/theme";
-import type { BusinessSector, HeroContent, PageContent, Product, PromoCard, Section, SiteContent, TrustIcon } from "@/lib/types";
+import type { BusinessSector, HeroContent, PageContent, Product, PromoCard, PublicCustomer, Section, SiteContent, TrustIcon } from "@/lib/types";
 import { ThreeHeroCanvas } from "@/components/store/three-hero";
 import { placeOrder, sendMessage, subscribeEmail, lookupOrder, validatePromoCode } from "@/lib/actions";
 import { orderStatusLabel } from "@/lib/order-status";
@@ -221,7 +221,7 @@ function Footer({ content }: { content: SiteContent }) {
           © {new Date().getFullYear()} {content.footer.copyright}
         </span>
         <span>Paiements sécurisés : CB · Visa · Mastercard · PayPal · Apple Pay</span>
-        <Link href="/compte">Suivi de commande</Link>
+        <Link href="/suivi">Suivi de commande</Link>
       </div>
     </footer>
   );
@@ -860,8 +860,28 @@ export function CartView({ content }: { content: SiteContent }) {
   );
 }
 
-export function CheckoutView({ content, paymentsLive }: { content: SiteContent; paymentsLive: boolean }) {
+export function CheckoutView({
+  content,
+  paymentsLive,
+  customer,
+}: {
+  content: SiteContent;
+  paymentsLive: boolean;
+  customer: PublicCustomer;
+}) {
   const cart = useCart();
+  const defaultAddress = customer.addresses.find((item) => item.isDefault) ?? customer.addresses[0];
+  const [addressId, setAddressId] = useState(defaultAddress?.id ?? "new");
+  const chosen = customer.addresses.find((item) => item.id === addressId);
+  const prefill = chosen ?? {
+    firstName: customer.firstName,
+    lastName: customer.lastName,
+    phone: customer.phone,
+    address: "",
+    postal: "",
+    city: "",
+    country: "France",
+  };
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [promoCodeInput, setPromoCodeInput] = useState("");
@@ -919,21 +939,27 @@ export function CheckoutView({ content, paymentsLive }: { content: SiteContent; 
           const result = await placeOrder({
             firstName: String(form.get("firstName") ?? ""),
             lastName: String(form.get("lastName") ?? ""),
-            email: String(form.get("email") ?? ""),
+            email: customer.email,
             phone: String(form.get("phone") ?? ""),
             address: String(form.get("address") ?? ""),
             postal: String(form.get("postal") ?? ""),
             city: String(form.get("city") ?? ""),
             country: String(form.get("country") ?? "France"),
             items: lines.map((line) => ({ productId: line.product.id, qty: line.qty })),
+            promoCode: appliedPromo?.code,
+            acceptTerms: form.get("acceptTerms") === "on",
+            saveAddress: addressId === "new" && form.get("saveAddress") === "on",
           });
           setPending(false);
           if (!result.ok) {
+            if ("needsLogin" in result && result.needsLogin) {
+              window.location.href = "/compte/connexion?next=/commande";
+              return;
+            }
             setErrors(result.errors);
             document.getElementById("error-title")?.focus();
             return;
           }
-          localStorage.setItem("koundiata-email", String(form.get("email") ?? "").toLowerCase());
           if (result.redirectUrl) {
             window.location.href = result.redirectUrl;
             return;
@@ -949,18 +975,47 @@ export function CheckoutView({ content, paymentsLive }: { content: SiteContent; 
               <div>{errors.form}</div>
             </div>
           ) : null}
-          <div className="name-grid">
-            <Field name="firstName" label="Prénom" error={errors.firstName} />
-            <Field name="lastName" label="Nom" error={errors.lastName} />
+          <p className="note">
+            Commande passée avec le compte <strong>{customer.email}</strong>.{" "}
+            <Link href="/compte">Mon compte</Link>
+          </p>
+          {customer.addresses.length ? (
+            <label className="field">
+              <span>Adresse de livraison</span>
+              <select value={addressId} onChange={(event) => setAddressId(event.target.value)}>
+                {customer.addresses.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label} : {item.address}, {item.postal} {item.city}
+                  </option>
+                ))}
+                <option value="new">Nouvelle adresse…</option>
+              </select>
+            </label>
+          ) : null}
+          <div key={addressId} style={{ display: "grid", gap: 12 }}>
+            <div className="name-grid">
+              <Field name="firstName" label="Prénom" error={errors.firstName} defaultValue={prefill.firstName} />
+              <Field name="lastName" label="Nom" error={errors.lastName} defaultValue={prefill.lastName} />
+            </div>
+            <Field name="phone" label="Téléphone" error={errors.phone} defaultValue={prefill.phone} />
+            <Field name="address" label="Adresse" error={errors.address} defaultValue={prefill.address} />
+            <div className="name-grid">
+              <Field name="postal" label="Code postal" error={errors.postal} defaultValue={prefill.postal} />
+              <Field name="city" label="Ville" error={errors.city} defaultValue={prefill.city} />
+            </div>
+            <Field name="country" label="Pays" defaultValue={prefill.country || "France"} />
           </div>
-          <Field name="email" label="E-mail" type="email" error={errors.email} />
-          <Field name="phone" label="Téléphone" error={errors.phone} />
-          <Field name="address" label="Adresse" error={errors.address} />
-          <div className="name-grid">
-            <Field name="postal" label="Code postal" error={errors.postal} />
-            <Field name="city" label="Ville" error={errors.city} />
-          </div>
-          <Field name="country" label="Pays" defaultValue="France" />
+          {addressId === "new" ? (
+            <label className="check-line">
+              <input type="checkbox" name="saveAddress" defaultChecked /> Enregistrer cette adresse dans mon carnet
+            </label>
+          ) : null}
+          <label className="check-line">
+            <input type="checkbox" name="acceptTerms" required /> J&apos;accepte les{" "}
+            <Link href="/cgv" target="_blank">
+              conditions générales de vente
+            </Link>
+          </label>
         </div>
         <aside className="summary">
           {lines.map((line) => (

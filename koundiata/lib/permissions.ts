@@ -42,6 +42,6 @@ export function permissionForStudioPath(path: string): Permission {
   if (path.startsWith("/studio/messages")) return "messages";
   if (path.startsWith("/studio/promotions")) return "promos";
   if (path.startsWith("/studio/automatisations")) return "automations";
-  if (path.startsWith("/studio/audit")) return "team";
+  if (path.startsWith("/studio/audit") || path.startsWith("/studio/installation")) return "team";
   return "content";
 }

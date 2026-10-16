@@ -1,10 +1,9 @@
-import { mkdir, writeFile } from "fs/promises";
-import path from "path";
 import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { can } from "@/lib/permissions";
 import { rateLimit } from "@/lib/rate-limit";
+import { storeUpload } from "@/lib/uploads";
 
 export const runtime = "nodejs";
 
@@ -42,8 +41,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Le fichier n'est pas une image valide." }, { status: 400 });
   }
   const name = `${Date.now()}-${randomBytes(6).toString("hex")}.${kind.ext}`;
-  const dir = path.join(process.cwd(), "public", "uploads");
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, name), bytes);
-  return NextResponse.json({ url: `/uploads/${name}` });
+  try {
+    return NextResponse.json({ url: await storeUpload(name, bytes, file.type) });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Envoi impossible." }, { status: 502 });
+  }
 }

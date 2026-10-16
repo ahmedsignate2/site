@@ -1,27 +1,41 @@
 import { promises as fs } from "fs";
 import path from "path";
+import postgres from "postgres";
 import { createSeed } from "@/lib/seed";
 import type { StoreData } from "@/lib/types";
 import { DEFAULT_EMAIL_TEMPLATES } from "@/lib/automation";
 import { DEFAULT_ADMIN_USERS, LEGACY_DEMO_USER_IDS } from "@/lib/audit";
 
+/*
+ * Stockage des données de la boutique.
+ * - DATABASE_URL défini (Neon, Supabase, Vercel Postgres, Railway…) : Postgres,
+ *   compatible serverless (Vercel, Cloudflare, Netlify) et multi-instance.
+ * - Sinon : fichier data/store.json, pour le développement ou un serveur unique.
+ */
+
 const file = path.join(process.cwd(), "data", "store.json");
 
-let chain: Promise<unknown> = Promise.resolve();
+export function storageBackend() {
+  return process.env.DATABASE_URL ? "postgres" : "file";
+}
 
-async function ensure(): Promise<StoreData> {
-  let data: StoreData;
-  try {
-    const raw = await fs.readFile(file, "utf8");
-    data = JSON.parse(raw) as StoreData;
-  } catch {
-    data = createSeed();
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify(data));
-    return data;
-  }
-
+/** Met les anciennes données au format actuel. Renvoie true si quelque chose a changé. */
+function migrate(data: StoreData) {
   let mutated = false;
+  // Un propriétaire principal, protégé, doit toujours exister dès qu'un compte réel existe.
+  const owners = (data.adminUsers || []).filter((user) => user.role === "owner" && user.passwordHash);
+  if (owners.length && !data.adminUsers!.some((user) => user.primary)) {
+    owners[0].primary = true;
+    mutated = true;
+  }
+  if (!data.customers) {
+    data.customers = [];
+    mutated = true;
+  }
+  if (!data.integrations) {
+    data.integrations = {};
+    mutated = true;
+  }
   if (!data.promoCodes) {
     data.promoCodes = [
       { code: "BIENVENUE10", discountType: "percent", discountValue: 10, minPurchaseCents: 3000, usedCount: 14, active: true },
@@ -30,8 +44,14 @@ async function ensure(): Promise<StoreData> {
     mutated = true;
   }
   if (!data.emailTemplates || data.emailTemplates.length === 0) {
-    data.emailTemplates = DEFAULT_EMAIL_TEMPLATES;
+    data.emailTemplates = structuredClone(DEFAULT_EMAIL_TEMPLATES);
     mutated = true;
+  }
+  for (const template of DEFAULT_EMAIL_TEMPLATES) {
+    if (!data.emailTemplates.some((item) => item.slug === template.slug)) {
+      data.emailTemplates.push(structuredClone(template));
+      mutated = true;
+    }
   }
   if (!data.emailLogs) {
     data.emailLogs = [
@@ -81,15 +101,42 @@ async function ensure(): Promise<StoreData> {
     mutated = true;
   }
 
-  if (mutated) {
-    await fs.writeFile(file, JSON.stringify(data));
-  }
+  return mutated;
+}
 
+/* ---------- Fichier local ---------- */
+
+let chain: Promise<unknown> = Promise.resolve();
+
+async function readFileStore(): Promise<StoreData | null> {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8")) as StoreData;
+  } catch {
+    return null;
+  }
+}
+
+async function writeFileStore(data: StoreData) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(temp, JSON.stringify(data));
+  await fs.rename(temp, file);
+}
+
+async function fileEnsure(): Promise<StoreData> {
+  let data = await readFileStore();
+  if (!data) {
+    data = createSeed();
+    migrate(data);
+    await writeFileStore(data);
+    return data;
+  }
+  if (migrate(data)) await writeFileStore(data);
   return data;
 }
 
-export async function readStore() {
-  const run = chain.then(() => ensure());
+function serialize<T>(task: () => Promise<T>) {
+  const run = chain.then(task);
   chain = run.then(
     () => undefined,
     () => undefined,
@@ -97,16 +144,76 @@ export async function readStore() {
   return run;
 }
 
-export async function updateStore(mutate: (data: StoreData) => void) {
-  const run = chain.then(async () => {
-    const data = await ensure();
+/* ---------- Postgres ---------- */
+
+type Sql = ReturnType<typeof postgres>;
+const globalForSql = globalThis as unknown as { kdSql?: Sql; kdSqlReady?: Promise<void> };
+
+function sql() {
+  if (!globalForSql.kdSql) {
+    globalForSql.kdSql = postgres(process.env.DATABASE_URL as string, {
+      max: Number(process.env.DATABASE_POOL_SIZE || 5),
+      prepare: false, // compatible avec les poolers (PgBouncer, Supabase, Neon)
+      idle_timeout: 20,
+    });
+  }
+  return globalForSql.kdSql;
+}
+
+async function pgReady() {
+  if (!globalForSql.kdSqlReady) {
+    globalForSql.kdSqlReady = (async () => {
+      const db = sql();
+      await db`create table if not exists kd_store (id integer primary key, data jsonb not null, updated_at timestamptz not null default now())`;
+      const rows = await db`select 1 from kd_store where id = 1`;
+      if (!rows.length) {
+        // Premier démarrage : on reprend data/store.json s'il existe, sinon des données neutres.
+        const initial = (await readFileStore()) ?? createSeed();
+        migrate(initial);
+        await db`insert into kd_store (id, data) values (1, ${db.json(initial as never)}) on conflict (id) do nothing`;
+      }
+    })().catch((error) => {
+      globalForSql.kdSqlReady = undefined;
+      throw error;
+    });
+  }
+  return globalForSql.kdSqlReady;
+}
+
+async function pgRead(): Promise<StoreData> {
+  await pgReady();
+  const [row] = await sql()`select data from kd_store where id = 1`;
+  const data = row.data as StoreData;
+  if (migrate(data)) await pgUpdate(() => {});
+  return data;
+}
+
+async function pgUpdate(mutate: (data: StoreData) => void): Promise<StoreData> {
+  await pgReady();
+  return sql().begin(async (tx) => {
+    // Verrou de ligne : deux écritures simultanées passent l'une après l'autre.
+    const [row] = await tx`select data from kd_store where id = 1 for update`;
+    const data = row.data as StoreData;
+    migrate(data);
     mutate(data);
-    await fs.writeFile(file, JSON.stringify(data));
+    await tx`update kd_store set data = ${tx.json(data as never)}, updated_at = now() where id = 1`;
+    return data;
+  }) as Promise<StoreData>;
+}
+
+/* ---------- API ---------- */
+
+export async function readStore(): Promise<StoreData> {
+  if (storageBackend() === "postgres") return pgRead();
+  return serialize(fileEnsure);
+}
+
+export async function updateStore(mutate: (data: StoreData) => void): Promise<StoreData> {
+  if (storageBackend() === "postgres") return pgUpdate(mutate);
+  return serialize(async () => {
+    const data = await fileEnsure();
+    mutate(data);
+    await writeFileStore(data);
     return data;
   });
-  chain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
 }

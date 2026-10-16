@@ -293,6 +293,8 @@ export type Order = {
   stockHeld?: boolean;
   /** Jeton aléatoire qui autorise l'annulation du paiement depuis le retour Stripe. */
   cancelToken?: string;
+  /** Compte client qui a passé la commande. */
+  customerId?: string;
   payment?: PaymentRecord;
   customer: {
     firstName: string;
@@ -336,7 +338,11 @@ export type AutomationEventName =
   | "order.refunded"
   | "stock.low"
   | "message.received"
-  | "auth.login_alert";
+  | "auth.login_alert"
+  | "customer.welcome"
+  | "customer.verify"
+  | "customer.password_reset"
+  | "admin.new_order";
 
 export type EmailTemplate = {
   slug: string;
@@ -353,7 +359,8 @@ export type EmailLog = {
   recipient: string;
   subject: string;
   templateSlug: string;
-  status: "envoye" | "en_attente" | "echec";
+  /** "simule" : aucun service d'envoi configuré, l'e-mail n'est pas parti. */
+  status: "envoye" | "en_attente" | "echec" | "simule";
   sentAt: string;
   errorMessage?: string;
   idempotencyKey: string;
@@ -368,6 +375,8 @@ export type AdminUser = {
   role: AdminRole;
   active: boolean;
   lastLoginAt?: string;
+  /** Propriétaire principal (créé à l'installation) : personne d'autre ne peut le modifier, le désactiver ni le rétrograder. */
+  primary?: boolean;
   /** Hachage scrypt du mot de passe ("scrypt$sel$hash"). Jamais envoyé au navigateur. */
   passwordHash?: string;
   /** Incrémenté à chaque changement de mot de passe ou de rôle : invalide les sessions ouvertes. */
@@ -399,6 +408,62 @@ export type ContactMessage = {
   read: boolean;
 };
 
+export type CustomerAddress = {
+  id: string;
+  label: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  address: string;
+  postal: string;
+  city: string;
+  country: string;
+  isDefault: boolean;
+};
+
+export type Customer = {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  passwordHash: string;
+  sessionVersion: number;
+  createdAt: string;
+  lastLoginAt?: string;
+  emailVerified: boolean;
+  marketingOptIn: boolean;
+  /** Suspendu par l'équipe du studio : ne peut plus se connecter ni commander. */
+  blocked: boolean;
+  addresses: CustomerAddress[];
+  wishlist: string[];
+  /** Jeton à usage unique (haché) pour la réinitialisation du mot de passe ou la vérification d'e-mail. */
+  tokens?: { kind: "reset" | "verify"; hash: string; expiresAt: string }[];
+};
+
+/** Client tel qu'il est exposé au navigateur. */
+export type PublicCustomer = Omit<Customer, "passwordHash" | "sessionVersion" | "tokens">;
+
+/**
+ * Clés des services externes saisies depuis le studio (page Installation).
+ * Les secrets sont chiffrés (AES-GCM, clé dérivée de AUTH_SECRET).
+ * Une variable d'environnement du même nom est toujours prioritaire.
+ */
+export type IntegrationSettings = {
+  siteUrl?: string;
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  resendApiKey?: string;
+  emailFrom?: string;
+  adminNotifyEmail?: string;
+  s3Endpoint?: string;
+  s3Bucket?: string;
+  s3AccessKeyId?: string;
+  s3SecretAccessKey?: string;
+  s3PublicUrl?: string;
+  s3Region?: string;
+};
+
 export type StoreData = {
   draft: SiteContent;
   published: SiteContent;
@@ -410,6 +475,8 @@ export type StoreData = {
   emailLogs?: EmailLog[];
   auditLogs?: AuditLogEntry[];
   adminUsers?: AdminUser[];
+  customers?: Customer[];
+  integrations?: IntegrationSettings;
 };
 
 export type CheckoutInput = {
@@ -423,4 +490,7 @@ export type CheckoutInput = {
   country: string;
   items: { productId: string; qty: number }[];
   note?: string;
+  promoCode?: string;
+  acceptTerms?: boolean;
+  saveAddress?: boolean;
 };

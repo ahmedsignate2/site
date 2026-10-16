@@ -42,30 +42,39 @@ export function passwordProblem(password: string) {
 
 type SessionPayload = { uid: string; v: number; exp: number };
 
-function sign(body: string) {
-  return createHmac("sha256", secret()).update(body).digest("base64url");
+function sign(body: string, scope = "admin") {
+  return createHmac("sha256", secret()).update(`${scope}:${body}`).digest("base64url");
 }
 
-export function createSessionToken(user: AdminUser) {
-  const payload: SessionPayload = { uid: user.id, v: user.sessionVersion ?? 0, exp: Date.now() + SESSION_TTL_MS };
+/** Jeton signé générique (sessions client, etc.). Le « scope » empêche de réutiliser un jeton d'un usage à l'autre. */
+export function signPayload(payload: object, scope: string) {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${body}.${sign(body)}`;
+  return `${body}.${sign(body, scope)}`;
 }
 
-function readToken(token: string | undefined): SessionPayload | null {
+export function readPayload<T extends { exp: number }>(token: string | undefined, scope: string): T | null {
   if (!token) return null;
   const [body, signature] = token.split(".");
   if (!body || !signature) return null;
-  const expected = Buffer.from(sign(body));
+  const expected = Buffer.from(sign(body, scope));
   const given = Buffer.from(signature);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
   try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString()) as SessionPayload;
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString()) as T;
     if (typeof payload.exp !== "number" || payload.exp < Date.now()) return null;
     return payload;
   } catch {
     return null;
   }
+}
+
+export function createSessionToken(user: AdminUser) {
+  const payload: SessionPayload = { uid: user.id, v: user.sessionVersion ?? 0, exp: Date.now() + SESSION_TTL_MS };
+  return signPayload(payload, "admin");
+}
+
+function readToken(token: string | undefined) {
+  return readPayload<SessionPayload>(token, "admin");
 }
 
 export async function setSessionCookie(user: AdminUser) {
