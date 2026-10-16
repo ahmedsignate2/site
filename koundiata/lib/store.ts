@@ -17,7 +17,18 @@ const file = path.join(process.cwd(), "data", "store.json");
 
 /** Neon, Supabase et Vercel exposent l'adresse sous l'un de ces noms. */
 function databaseUrl() {
-  return process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || "";
+  const env = process.env;
+  const direct = env.DATABASE_URL || env.POSTGRES_URL || env.POSTGRES_PRISMA_URL || env.NEON_DATABASE_URL;
+  if (direct) return direct;
+  // Certaines intégrations ne fournissent que les morceaux (hôte, utilisateur, mot de passe, base).
+  const host = env.PGHOST || env.POSTGRES_HOST;
+  const user = env.PGUSER || env.POSTGRES_USER;
+  const password = env.PGPASSWORD || env.POSTGRES_PASSWORD;
+  const database = env.PGDATABASE || env.POSTGRES_DATABASE || "neondb";
+  if (host && user && password) {
+    return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}/${database}?sslmode=require`;
+  }
+  return "";
 }
 
 export function storageBackend() {
